@@ -7,12 +7,16 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# llama-cpp-python first, in its own layer: it compiles llama.cpp (minutes), so other
+# dependency changes must not invalidate it. Version must match requirements.txt.
+RUN pip install --no-cache-dir llama-cpp-python==0.3.35
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Model baked into the image (v1 decision): big image, but fast and self-contained startup.
 COPY models/Qwen3-1.7B-Instruct-Q8_0.gguf /models/model.gguf
-COPY summarizer.py worker.py db.py webhook.py ./
+COPY summarizer.py worker.py db.py webhook.py storage.py ./
 
 ENV MODEL_PATH=/models/model.gguf \
     MODEL_NAME=qwen3-1.7b-instruct-q8_0 \

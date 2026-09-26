@@ -36,6 +36,30 @@ services:
       timeout: 5s
       retries: 10
 
+  garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: garage
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    ports:
+      - "3900:3900"    # S3 API
+      - "3903:3903"    # admin API (/health)
+    environment:
+      # Dev-only credentials. Access key id format: GK + 24 hex; secret: 64 hex.
+      GARAGE_RPC_SECRET: "6465762d6f6e6c792d7270632d7365637265742d706c6174666f726d2d746b73"
+      GARAGE_ADMIN_TOKEN: dev-admin-token
+      GARAGE_DEFAULT_ACCESS_KEY: GK706c6174666f726d2d746b73
+      GARAGE_DEFAULT_SECRET_KEY: "6465762d6f6e6c792d73332d7365637265742d706c6174666f726d2d7461736b"
+      GARAGE_DEFAULT_BUCKET: platform-tasks-dev
+    volumes:
+      - ./infra/garage/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+    healthcheck:
+      # The image is FROM scratch (no shell, no curl): ask the binary itself.
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   worker:
     image: summarizer-worker:dev
     build: ./worker
@@ -45,9 +69,16 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      garage:
+        condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://app:app@rabbitmq:5672/%2F   # "rabbitmq" = the service name, not localhost
       DATABASE_URL: postgresql://app:app@postgres:5432/tasks   # container port, not the 5433 host mapping
+      S3_ENDPOINT_URL: http://garage:3900
+      S3_BUCKET: platform-tasks-dev
+      AWS_REGION: garage
+      AWS_ACCESS_KEY_ID: GK706c6174666f726d2d746b73
+      AWS_SECRET_ACCESS_KEY: "6465762d6f6e6c792d73332d7365637265742d706c6174666f726d2d7461736b"
       N_THREADS: "1"
       TASK_TIMEOUT_S: ${TASK_TIMEOUT_S:-540}   # per-task wall clock; < stop_grace_period
     extra_hosts:
@@ -62,3 +93,4 @@ services:
 volumes:
   rabbitmq-data:
   postgres-data:
+  garage-data:

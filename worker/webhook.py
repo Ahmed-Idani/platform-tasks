@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 
 TIMEOUT_S = 10
-BACKOFF_S = [1, 3]  # waits between the 3 attempts
+BACKOFF_S = [1]  # 2 quick tries; after that the payload is parked and the API dispatcher retries
 
 
 def payload(task_id, row):
@@ -25,7 +25,7 @@ def send(url, body):
   """Returns None on success (any 2xx), else the last error as a string."""
   data = json.dumps(body).encode()
   last_error = None
-  for attempt, wait in enumerate([0, *BACKOFF_S], start=1):
+  for wait in [0, *BACKOFF_S]:
     time.sleep(wait)
     req = urllib.request.Request(url, data=data, method="POST", headers={
       "Content-Type": "application/json",
@@ -41,5 +41,4 @@ def send(url, body):
       last_error = f"HTTP {e.code}"
     except Exception as e:  # DNS, refused, timeout...
       last_error = f"{type(e).__name__}: {e}"
-    last_error = f"attempt {attempt}: {last_error}"
   return last_error

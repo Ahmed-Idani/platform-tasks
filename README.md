@@ -9,10 +9,11 @@ flowchart LR
     client([Client / Web UI])
 
     subgraph platform [platform-tasks]
-        api[Go API]
+        api[Go API<br/>+ sweeper, reaper,<br/>webhook dispatcher]
         pg[(PostgreSQL<br/>tasks table)]
-        mq[[RabbitMQ<br/>tasks.llm_inference]]
+        mq[[RabbitMQ<br/>tasks exchange<br/>main / retry / DLQ]]
         worker[Python worker<br/>llama.cpp + Qwen3]
+        s3[(Garage S3<br/>undelivered webhooks)]
     end
 
     client -- "POST /v1/tasks<br/>GET /v1/tasks/{id}" --> api
@@ -21,6 +22,9 @@ flowchart LR
     mq -- "deliver (prefetch 1)" --> worker
     worker -- "claim, status, result" --> pg
     worker -. "POST callback_url" .-> client
+    worker -- "client down: park payload" --> s3
+    s3 -- "retry with backoff" --> api
+    api -. "POST callback_url (later)" .-> client
 ```
 
 ## Task lifecycle
@@ -75,7 +79,7 @@ stateDiagram-v2
 | `worker/` | Python worker: consumes the queue, runs the model |
 | `worker/models/` | GGUF model files (gitignored, copied into the image) |
 | `web/` | React dashboard (Vite + TypeScript + Tailwind) |
-| `infra/` | Config for third-party services (`rabbitmq.conf`, …) |
+| `infra/` | Config for third-party services: RabbitMQ topology (`definitions.json`), Garage (`garage.toml`) |
 | `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (prints callbacks) |
 | `testdata/` | Sample inputs |
 | `docs/plan/` | Project context, build plan, TODO / decision log |
@@ -97,5 +101,6 @@ scripts/dev.sh down             # stop everything
 |---|---|
 | RabbitMQ UI | http://localhost:15672 (`app` / `app`) |
 | Postgres | `localhost:5433` (`app` / `app`, db `tasks`) |
+| Garage (S3) | http://localhost:3900 (bucket `platform-tasks-dev`) |
 | API | http://localhost:8080 |
 | Web UI | http://localhost:5173 |

@@ -17,8 +17,10 @@ import (
 
 	"platform-tasks/api/internal/httpapi"
 	"platform-tasks/api/internal/queue"
+	"platform-tasks/api/internal/storage"
 	"platform-tasks/api/internal/store"
 	"platform-tasks/api/internal/sweeper"
+	"platform-tasks/api/internal/webhooks"
 )
 
 func main() {
@@ -61,10 +63,16 @@ func run() error {
 	}
 	defer pub.Close()
 
+	objects, err := storage.New(ctx)
+	if err != nil {
+		return err
+	}
+
 	st := store.New(pool)
 
 	var wg sync.WaitGroup
 	wg.Go(func() { sweeper.Run(ctx, st, pub) })
+	wg.Go(func() { webhooks.Run(ctx, st, objects) })
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -84,7 +92,7 @@ func run() error {
 	// Graceful shutdown:
 	//   1. Shutdown closes the listener: no new connections.
 	//   2. It waits for in-flight requests to finish (up to 30s).
-	//   3. The sweeper has seen ctx.Done() and exits; wg.Wait makes sure it did.
+	//   3. The sweeper and webhook dispatcher have seen ctx.Done() and exit; wg.Wait makes sure.
 	//   4. Deferred calls close RabbitMQ, then the Postgres pool, after nothing uses them.
 	slog.Info("shutting down: draining in-flight requests")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

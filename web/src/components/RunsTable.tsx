@@ -1,7 +1,7 @@
 import clsx from "clsx";
-import { ArrowRight, CircleAlert, Clock3, Inbox, RefreshCw, Webhook } from "lucide-react";
+import { ArrowRight, CircleAlert, Clock3, Inbox, RefreshCw, RotateCw, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
-import { MAX_ATTEMPTS, type Status, type Task, displayStatus, isActive } from "../lib/api";
+import { MAX_ATTEMPTS, type Status, type Task, displayStatus, isActive, webhookState } from "../lib/api";
 import { between, duration, num, relative, shortId, timestamp, useNow } from "../lib/format";
 import { Button, CopyButton, Skeleton, StatusBadge, statusMeta } from "./ui";
 
@@ -18,22 +18,18 @@ const COLS = [
 ];
 
 function WebhookCell({ task }: { task: Task }) {
-  if (!task.callback_url) return <span className="text-faint">–</span>;
-  if (task.webhook_sent_at)
-    return (
-      <span title={`Delivered ${timestamp(task.webhook_sent_at)}`} className="inline-flex text-green">
-        <Webhook className="size-4" />
-      </span>
-    );
-  if (task.webhook_error)
-    return (
-      <span title={task.webhook_error} className="inline-flex text-red">
-        <CircleAlert className="size-4" />
-      </span>
-    );
+  const state = webhookState(task);
+  if (state === "none") return <span className="text-faint">–</span>;
+  const [Icon, tone, title] = {
+    delivered: [Webhook, "text-green", `Delivered ${timestamp(task.webhook_sent_at)}`],
+    retrying: [RotateCw, "text-amber", `Client unreachable, retrying (attempt ${task.webhook_attempts} failed). Next: ${timestamp(task.webhook_next_at)}`],
+    gave_up: [CircleAlert, "text-red", task.webhook_error ?? "Delivery failed"],
+    waiting: [Clock3, "text-faint", "Sent when the task finishes"],
+    sending: [Clock3, "text-faint", "Sending…"],
+  }[state] as [typeof Webhook, string, string];
   return (
-    <span title="Sent when the task finishes" className="inline-flex text-faint">
-      <Clock3 className="size-4" />
+    <span title={title} className={`inline-flex ${tone}`}>
+      <Icon className="size-4" />
     </span>
   );
 }

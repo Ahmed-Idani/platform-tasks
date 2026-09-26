@@ -31,6 +31,9 @@ export interface Task {
   completed_at: string | null;
   webhook_sent_at: string | null;
   webhook_error: string | null;
+  webhook_attempts: number;
+  webhook_next_at: string | null;
+  webhook_ref: string | null;
 }
 
 export interface QueueDepth {
@@ -105,6 +108,7 @@ export const api = {
       }),
     }),
   retry: (id: string) => request<Task>(`/v1/tasks/${id}/retry`, { method: "POST" }),
+  resendWebhook: (id: string) => request<{ status: string }>(`/v1/tasks/${id}/webhook/resend`, { method: "POST" }),
 };
 
 export const isActive = (s: Status) => ACTIVE.includes(s);
@@ -114,3 +118,14 @@ export type DisplayStatus = Status | "retrying";
 
 export const displayStatus = (t: Task): DisplayStatus =>
   t.status === "queued" && t.attempt > 0 && t.error ? "retrying" : t.status;
+
+/** Webhook delivery, as the UI tells it. */
+export type WebhookState = "none" | "waiting" | "sending" | "delivered" | "retrying" | "gave_up";
+
+export function webhookState(t: Task): WebhookState {
+  if (!t.callback_url) return "none";
+  if (t.webhook_sent_at) return "delivered";
+  if (t.webhook_ref && t.webhook_next_at) return "retrying"; // parked in object storage
+  if (t.webhook_attempts > 0 || t.webhook_error) return "gave_up";
+  return isActive(t.status) ? "waiting" : "sending";
+}

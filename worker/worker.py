@@ -10,6 +10,7 @@ import uuid
 import pika
 
 import db
+import storage
 import webhook
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://app:app@localhost:5672/%2F")
@@ -97,15 +98,32 @@ def heartbeat_loop(task_id, stop):
       log(f"heartbeat failed for {task_id}: {e!r}")
 
 
+WEBHOOK_FIRST_RETRY_S = 60  # the API dispatcher's first retry; its schedule continues from there
+
+
 def deliver_webhook(task_id, row):
+  """One direct delivery attempt (2 quick tries). If the client is down, park the exact
+  payload in object storage and let the API's dispatcher retry with backoff: the
+  worker is never held up by a slow client, and the model never runs twice for it."""
   if not row["callback_url"]:
     return
-  error = webhook.send(row["callback_url"], webhook.payload(task_id, row))
+  body = webhook.payload(task_id, row)
+  error = webhook.send(row["callback_url"], body)
   try:
-    db.persistent(db.record_webhook, task_id, error)
+    if error is None:
+      db.persistent(db.webhook_sent, task_id)
+      log(f"webhook {task_id}: sent")
+      return
+    try:
+      ref = storage.put_json(f"webhooks/{task_id}.json", body)
+    except Exception as e:
+      db.persistent(db.webhook_failed, task_id, f"{error}; could not park payload: {e!r}")
+      log(f"webhook {task_id}: FAILED ({error}) and could not park it: {e!r}")
+      return
+    db.persistent(db.webhook_parked, task_id, ref, error, WEBHOOK_FIRST_RETRY_S)
+    log(f"webhook {task_id}: client unreachable ({error}); parked at {ref}, API retries in {WEBHOOK_FIRST_RETRY_S}s")
   except Exception as e:
-    log(f"webhook {task_id}: could not record delivery: {e!r}")
-  log(f"webhook {task_id}: {'sent' if error is None else 'FAILED ' + error}")
+    log(f"webhook {task_id}: could not record delivery state: {e!r}")
 
 
 def fail(task_id, error):
@@ -134,8 +152,10 @@ def run_task(task_id):
       # by then that worker has finished, or its heartbeat is stale and we take over.
       log(f"{task_id}: still running elsewhere, checking again after the retry delay")
       return "retry", None
-    if row["status"] in ("completed", "failed") and row["callback_url"] and row["webhook_sent_at"] is None:
-      # Previous worker finished the task but died before the webhook: send it now.
+    if (row["status"] in ("completed", "failed") and row["callback_url"]
+        and row["webhook_sent_at"] is None and row["webhook_attempts"] == 0):
+      # Previous worker finished the task but died before trying the webhook: send it now.
+      # (If it had tried, delivery is already the API dispatcher's job.)
       log(f"{task_id}: already {row['status']}, sending the missing webhook")
       deliver_webhook(task_id, row)
       return "ack", None

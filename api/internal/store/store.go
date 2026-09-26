@@ -31,17 +31,23 @@ type Task struct {
 	CompletedAt   *time.Time      `json:"completed_at"`
 	WebhookSentAt *time.Time      `json:"webhook_sent_at"`
 	WebhookError  *string         `json:"webhook_error"`
+	// Undelivered webhooks: payload parked in object storage, retried by the dispatcher.
+	WebhookAttempts int        `json:"webhook_attempts"`
+	WebhookNextAt   *time.Time `json:"webhook_next_at"`
+	WebhookRef      *string    `json:"webhook_ref"`
 }
 
 // Same column order as scan() below.
 const columns = `id::text, task_type, status, callback_url, attempt, worker_id, result, error,
-	created_at, queued_at, started_at, completed_at, webhook_sent_at, webhook_error`
+	created_at, queued_at, started_at, completed_at, webhook_sent_at, webhook_error,
+	webhook_attempts, webhook_next_at, webhook_ref`
 
 func scan(row pgx.Row, t *Task, extra ...any) error {
 	var result []byte
 	dest := append([]any{
 		&t.ID, &t.TaskType, &t.Status, &t.CallbackURL, &t.Attempt, &t.WorkerID, &result, &t.Error,
 		&t.CreatedAt, &t.QueuedAt, &t.StartedAt, &t.CompletedAt, &t.WebhookSentAt, &t.WebhookError,
+		&t.WebhookAttempts, &t.WebhookNextAt, &t.WebhookRef,
 	}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return err
@@ -196,7 +202,8 @@ func (s *Store) ResetForRetry(ctx context.Context, id string) (Task, error) {
 		`UPDATE tasks
 		    SET status = 'pending', attempt = 0, error = NULL, result = NULL, worker_id = NULL,
 		        heartbeat_at = NULL, queued_at = NULL, started_at = NULL, completed_at = NULL,
-		        webhook_sent_at = NULL, webhook_error = NULL
+		        webhook_sent_at = NULL, webhook_error = NULL,
+		        webhook_attempts = 0, webhook_next_at = NULL, webhook_ref = NULL
 		  WHERE id = $1 AND status IN ('failed', 'cancelled')
 		  RETURNING `+columns, id)
 	if err := scan(row, &t); err != nil {
@@ -230,4 +237,76 @@ func (s *Store) CountByStatus(ctx context.Context) (map[string]int, error) {
 		counts[status] = n
 	}
 	return counts, rows.Err()
+}
+
+// ---- webhook dispatcher ----------------------------------------------------------
+
+type DueWebhook struct {
+	ID          string
+	CallbackURL string
+	Ref         string
+	Attempts    int
+}
+
+// ClaimDueWebhooks leases up to limit undelivered webhooks whose retry time has come.
+// "Leases": it pushes their next_at forward by `lease` in the same statement, so another
+// API replica running the same loop won't pick them up while we deliver. SKIP LOCKED
+// makes two replicas split the batch instead of waiting on each other. If this replica
+// dies mid-delivery, the lease simply expires and someone retries.
+func (s *Store) ClaimDueWebhooks(ctx context.Context, lease time.Duration, limit int) ([]DueWebhook, error) {
+	rows, err := s.pool.Query(ctx,
+		`UPDATE tasks SET webhook_next_at = now() + make_interval(secs => $1)
+		  WHERE id IN (SELECT id FROM tasks
+		                WHERE webhook_next_at <= now() AND webhook_sent_at IS NULL AND webhook_ref IS NOT NULL
+		                ORDER BY webhook_next_at
+		                LIMIT $2
+		                FOR UPDATE SKIP LOCKED)
+		  RETURNING id::text, callback_url, webhook_ref, webhook_attempts`, lease.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim due webhooks: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[DueWebhook])
+}
+
+func (s *Store) WebhookDelivered(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tasks SET webhook_sent_at = now(), webhook_error = NULL, webhook_attempts = webhook_attempts + 1,
+		                  webhook_next_at = NULL, webhook_ref = NULL
+		  WHERE id = $1`, id)
+	return err
+}
+
+// WebhookFailed records a failed attempt. retryIn nil = give up (the parked payload
+// is left for the bucket's lifecycle rule to expire).
+func (s *Store) WebhookFailed(ctx context.Context, id, errMsg string, retryIn *time.Duration) error {
+	var next any // NULL
+	if retryIn != nil {
+		next = retryIn.Seconds()
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE tasks SET webhook_attempts = webhook_attempts + 1, webhook_error = $2,
+		                  webhook_next_at = CASE WHEN $3::float8 IS NULL THEN NULL
+		                                         ELSE now() + make_interval(secs => $3::float8) END
+		  WHERE id = $1`, id, errMsg, next)
+	return err
+}
+
+var ErrNoPendingWebhook = errors.New("no undelivered webhook for this task")
+
+// ResendWebhookNow makes a parked webhook due immediately (also revives one that was
+// given up on, as long as its payload is still in the bucket).
+func (s *Store) ResendWebhookNow(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tasks SET webhook_next_at = now()
+		  WHERE id = $1 AND webhook_ref IS NOT NULL AND webhook_sent_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		if _, getErr := s.Get(ctx, id); errors.Is(getErr, ErrNotFound) {
+			return ErrNotFound
+		}
+		return ErrNoPendingWebhook
+	}
+	return nil
 }

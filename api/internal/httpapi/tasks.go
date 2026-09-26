@@ -241,3 +241,22 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"counts": counts, "total": total, "queues": queues})
 }
+
+// POST /v1/tasks/{id}/webhook/resend: retry a parked webhook now instead of waiting.
+func (s *Server) resendWebhook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isUUID(id) {
+		writeError(w, http.StatusBadRequest, "task id must be a UUID")
+		return
+	}
+	switch err := s.store.ResendWebhookNow(r.Context(), id); {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "task not found")
+	case errors.Is(err, store.ErrNoPendingWebhook):
+		writeError(w, http.StatusConflict, "this task has no undelivered webhook")
+	case err != nil:
+		internalError(w, r, err)
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "scheduled", "detail": "delivered within the next 15s"})
+	}
+}

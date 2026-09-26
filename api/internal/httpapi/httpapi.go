@@ -34,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/tasks", s.listTasks)
 	mux.HandleFunc("GET /v1/tasks/{id}", s.getTask)
 	mux.HandleFunc("POST /v1/tasks/{id}/retry", s.retryTask)
+	mux.HandleFunc("POST /v1/tasks/{id}/webhook/resend", s.resendWebhook)
 	mux.HandleFunc("GET /v1/stats", s.stats)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

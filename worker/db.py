@@ -74,7 +74,8 @@ def get(task_id):
   with pool.connection() as conn:
     return conn.execute(
       """
-      SELECT status, task_type, callback_url, attempt, result, error, completed_at, webhook_sent_at,
+      SELECT status, task_type, callback_url, attempt, result, error, completed_at,
+             webhook_sent_at, webhook_ref, webhook_attempts,
              heartbeat_at > now() - make_interval(secs => %(stale)s) AS alive
         FROM tasks WHERE id = %(id)s
       """,
@@ -122,9 +123,31 @@ def requeue_for_retry(task_id, worker_id, error):
     ).fetchone() is not None
 
 
-def record_webhook(task_id, error=None):
+def webhook_sent(task_id):
   with pool.connection() as conn:
-    if error is None:
-      conn.execute("UPDATE tasks SET webhook_sent_at = now(), webhook_error = NULL WHERE id = %s", (task_id,))
-    else:
-      conn.execute("UPDATE tasks SET webhook_error = %s WHERE id = %s", (error, task_id))
+    conn.execute(
+      """UPDATE tasks SET webhook_sent_at = now(), webhook_error = NULL,
+                          webhook_attempts = webhook_attempts + 1
+          WHERE id = %s""",
+      (task_id,),
+    )
+
+
+def webhook_parked(task_id, ref, error, retry_in_s):
+  """Direct delivery failed: payload is in object storage, the API dispatcher takes over."""
+  with pool.connection() as conn:
+    conn.execute(
+      """UPDATE tasks SET webhook_attempts = webhook_attempts + 1, webhook_error = %(error)s,
+                          webhook_ref = %(ref)s, webhook_next_at = now() + make_interval(secs => %(in)s)
+          WHERE id = %(id)s""",
+      {"id": task_id, "ref": ref, "error": error, "in": retry_in_s},
+    )
+
+
+def webhook_failed(task_id, error):
+  """Delivery failed AND the payload couldn't be parked: nothing will retry it."""
+  with pool.connection() as conn:
+    conn.execute(
+      "UPDATE tasks SET webhook_attempts = webhook_attempts + 1, webhook_error = %s WHERE id = %s",
+      (error, task_id),
+    )

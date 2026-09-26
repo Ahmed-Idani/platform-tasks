@@ -7,7 +7,7 @@
 #   scripts/dev.sh --keep-infra    on Ctrl+C, leave RabbitMQ/Postgres/worker containers running
 #   scripts/dev.sh down            stop everything without starting anything
 #
-# Ctrl+C shuts everything down: API, web, webhook receiver, worker, RabbitMQ, Postgres.
+# Ctrl+C shuts everything down: API, web, webhook receiver, worker, RabbitMQ, Postgres, Garage.
 # Data survives (Docker volumes are never removed). A task still running in the worker
 # gets 15s to finish; if it doesn't, its message is redelivered on the next start.
 set -euo pipefail
@@ -80,9 +80,17 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# ---- config shared by the API, storage-init and a local worker --------------------
+# Garage dev credentials (see docker-compose.yml). In prod: no endpoint, IRSA, no keys.
+export S3_ENDPOINT_URL=http://localhost:3900
+export S3_BUCKET=platform-tasks-dev
+export AWS_REGION=garage
+export AWS_ACCESS_KEY_ID=GK706c6174666f726d2d746b73
+export AWS_SECRET_ACCESS_KEY=6465762d6f6e6c792d73332d7365637265742d706c6174666f726d2d7461736b
+
 # ---- infra -----------------------------------------------------------------------
-say "starting RabbitMQ and Postgres"
-docker compose up -d --wait rabbitmq postgres
+say "starting RabbitMQ, Postgres and Garage"
+docker compose up -d --wait rabbitmq postgres garage
 
 say "running migrations"
 export GOOSE_DRIVER=postgres
@@ -92,6 +100,9 @@ if command -v goose >/dev/null; then GOOSE=goose
 elif [[ -x "$HOME/go/bin/goose" ]]; then GOOSE="$HOME/go/bin/goose"
 else GOOSE="go run github.com/pressly/goose/v3/cmd/goose@v3.28.0"; fi
 $GOOSE up
+
+say "configuring the bucket"
+(cd api && go run ./cmd/storage-init)
 
 # ---- web deps --------------------------------------------------------------------
 if [[ ! -d web/node_modules ]]; then
@@ -140,6 +151,7 @@ cat <<EOF
   ${bold}API${reset}           http://localhost:8080
   ${bold}RabbitMQ UI${reset}   http://localhost:15672   ${dim}(app / app)${reset}
   ${bold}Postgres${reset}      localhost:5433           ${dim}(app / app, db tasks)${reset}
+  ${bold}Garage (S3)${reset}   http://localhost:3900    ${dim}(bucket platform-tasks-dev)${reset}
   ${bold}Webhooks${reset}      http://host.docker.internal:9000/hook ${dim}(worker in Docker)${reset}
                 http://localhost:9000/hook            ${dim}(worker local)${reset}
 

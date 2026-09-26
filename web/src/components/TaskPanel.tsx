@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { ChevronDown, CircleAlert, FileText, RotateCw, Webhook, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ApiError, MAX_ATTEMPTS, RETRY_DELAY_S, type Task, api, displayStatus, isActive } from "../lib/api";
+import { ApiError, MAX_ATTEMPTS, RETRY_DELAY_S, type Task, api, displayStatus, isActive, webhookState } from "../lib/api";
 import { between, duration, num, timestamp, useNow } from "../lib/format";
 import { Button, CopyButton, Kbd, Skeleton, Spinner, StatusBadge } from "./ui";
 
@@ -80,12 +80,22 @@ function steps(task: Task, now: number): Step[] {
       gap: between(task.started_at, task.completed_at, s === "running" ? now : undefined),
     },
   ];
-  if (task.callback_url) {
+  const wh = webhookState(task);
+  if (wh !== "none") {
     list.push({
-      label: task.webhook_error && !task.webhook_sent_at ? "Webhook failed" : "Webhook delivered",
+      label: { delivered: "Webhook delivered", retrying: "Webhook retrying", gave_up: "Webhook failed" }[wh as string] ?? "Webhook",
       at: task.webhook_sent_at,
-      state: task.webhook_sent_at ? "done" : task.webhook_error ? "error" : finished ? "current" : "todo",
-      detail: task.webhook_error && !task.webhook_sent_at ? task.webhook_error : "POST callback_url",
+      state: wh === "delivered" ? "done" : wh === "gave_up" ? "error" : wh === "retrying" || wh === "sending" ? "current" : "todo",
+      detail:
+        wh === "delivered"
+          ? task.webhook_attempts > 1
+            ? `POST callback_url, delivered on attempt ${task.webhook_attempts} from object storage`
+            : "POST callback_url"
+          : wh === "retrying"
+            ? `Client unreachable. Payload parked in object storage, attempt ${task.webhook_attempts + 1} at ${timestamp(task.webhook_next_at)}`
+            : wh === "gave_up"
+              ? task.webhook_error
+              : "POST callback_url",
       gap: between(task.completed_at, task.webhook_sent_at),
     });
   }
@@ -294,32 +304,7 @@ function Body({ task, now }: { task: Task; now: number }) {
       </Section>
 
       <Section title="Webhook">
-        {task.callback_url ? (
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-2 rounded-md border border-border bg-subtle px-3 py-2">
-              <Webhook className="size-4 shrink-0 text-muted" />
-              <span className="min-w-0 flex-1 truncate font-mono text-[13px]" title={task.callback_url}>
-                {task.callback_url}
-              </span>
-              <CopyButton value={task.callback_url} label="Copy URL" />
-            </div>
-            <p className="text-[13px] text-muted">
-              {task.webhook_sent_at ? (
-                <span className="text-green">Delivered {timestamp(task.webhook_sent_at)}</span>
-              ) : task.webhook_error ? (
-                <span className="text-red">Delivery failed: {task.webhook_error}</span>
-              ) : isActive(task.status) ? (
-                "The worker POSTs the result here when the task finishes."
-              ) : (
-                <span className="inline-flex items-center gap-1.5">
-                  <Spinner className="size-3.5" /> Sending…
-                </span>
-              )}
-            </p>
-          </div>
-        ) : (
-          <p className="text-[13px] text-faint">No callback URL. Poll GET /v1/tasks/{"{id}"} for the result.</p>
-        )}
+        <WebhookSection task={task} now={now} />
       </Section>
 
       {task.parameters && (
@@ -333,6 +318,78 @@ function Body({ task, now }: { task: Task; now: number }) {
 
       <RawJson task={task} />
     </>
+  );
+}
+
+function WebhookSection({ task, now }: { task: Task; now: number }) {
+  const qc = useQueryClient();
+  const resend = useMutation({
+    mutationFn: () => api.resendWebhook(task.task_id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task", task.task_id] });
+      toast.success("Webhook rescheduled", { description: "The API dispatcher delivers it within 15s." });
+    },
+    onError: (e) => toast.error("Couldn't resend", { description: e.message }),
+  });
+  const state = webhookState(task);
+  if (state === "none") {
+    return <p className="text-[13px] text-faint">No callback URL. Poll GET /v1/tasks/{"{id}"} for the result.</p>;
+  }
+  const nextIn = task.webhook_next_at ? new Date(task.webhook_next_at).getTime() - now : null;
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-2 rounded-md border border-border bg-subtle px-3 py-2">
+        <Webhook className="size-4 shrink-0 text-muted" />
+        <span className="min-w-0 flex-1 truncate font-mono text-[13px]" title={task.callback_url!}>
+          {task.callback_url}
+        </span>
+        <CopyButton value={task.callback_url!} label="Copy URL" />
+      </div>
+
+      {state === "delivered" && (
+        <p className="text-[13px] text-green">
+          Delivered {timestamp(task.webhook_sent_at)}
+          {task.webhook_attempts > 1 && <span className="text-muted"> · attempt {task.webhook_attempts}, sent from object storage</span>}
+        </p>
+      )}
+      {state === "waiting" && <p className="text-[13px] text-muted">The worker POSTs the result here when the task finishes.</p>}
+      {state === "sending" && (
+        <p className="inline-flex items-center gap-1.5 text-[13px] text-muted">
+          <Spinner className="size-3.5" /> Sending…
+        </p>
+      )}
+
+      {(state === "retrying" || state === "gave_up") && (
+        <div
+          className={clsx(
+            "rounded-md border px-3.5 py-3 text-[13px]",
+            state === "retrying" ? "border-amber/25 bg-amber-soft text-amber" : "border-red/25 bg-red-soft text-red",
+          )}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <p className="font-medium">
+                {state === "retrying"
+                  ? `Client unreachable. Next attempt ${nextIn != null && nextIn > 0 ? `in ${duration(nextIn)}` : "any moment"}`
+                  : `Gave up after ${task.webhook_attempts} attempts`}
+              </p>
+              <p className="font-mono text-xs break-words opacity-90">{task.webhook_error}</p>
+              {task.webhook_ref && (
+                <p className="text-xs opacity-80">
+                  Payload parked at <span className="font-mono">{task.webhook_ref}</span>. The result is not recomputed.
+                </p>
+              )}
+            </div>
+            {task.webhook_ref && (
+              <Button size="sm" onClick={() => resend.mutate()} loading={resend.isPending} className="shrink-0">
+                Resend now
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -365,13 +422,16 @@ export function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) 
     refetchInterval: (q) => {
       const t = q.state.data;
       if (!t) return false;
-      const webhookPending = !!t.callback_url && !t.webhook_sent_at && !t.webhook_error;
-      return isActive(t.status) || webhookPending ? 1000 : false;
+      if (isActive(t.status)) return 1000;
+      const wh = webhookState(t);
+      if (wh === "sending") return 1000;
+      if (wh === "retrying") return 5000; // retries are minutes to hours apart
+      return false;
     },
     retry: (n, err) => !(err instanceof ApiError && err.status === 404) && n < 2,
   });
   const task = query.data;
-  const now = useNow(250, !!task && isActive(task.status));
+  const now = useNow(250, !!task && (isActive(task.status) || webhookState(task) === "retrying"));
   const qc = useQueryClient();
   const retry = useMutation({
     mutationFn: () => api.retry(id),
