@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector: { app: rabbitmq }
+  ports:
+    - { name: amqp, port: 5672 }
+    - { name: management, port: 15672 }
+    - { name: prometheus, port: 15692 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector: { matchLabels: { app: rabbitmq } }
+  template:
+    metadata:
+      labels: { app: rabbitmq }
+    spec:
+      # RabbitMQ names its data directory after the node name: keep it stable across restarts.
+      hostname: rabbitmq
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4-management
+          ports:
+            - { name: amqp, containerPort: 5672 }
+            - { name: management, containerPort: 15672 }
+            - { name: prometheus, containerPort: 15692 }
+          env:
+            - { name: RABBITMQ_DEFAULT_USER, value: app }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: RABBITMQ_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/rabbitmq }
+            # Same files as Docker Compose: consumer_timeout + topology (exchanges, queues, DLX).
+            - { name: config, mountPath: /etc/rabbitmq/conf.d/20-platform.conf, subPath: 20-platform.conf }
+            - { name: config, mountPath: /etc/rabbitmq/definitions.json, subPath: definitions.json }
+          readinessProbe:
+            exec: { command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            exec: { command: ["rabbitmq-diagnostics", "-q", "ping"] }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: config
+          configMap: { name: rabbitmq-config }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }

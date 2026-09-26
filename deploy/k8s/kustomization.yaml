@@ -1,0 +1,48 @@
+# Rendered by scripts/k8s.sh with --load-restrictor LoadRestrictionsNone, because the
+# config files are shared with Docker Compose (../../infra) instead of copied.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: platform
+
+resources:
+  - namespace.yaml
+  - infra/postgres.yaml
+  - infra/rabbitmq.yaml
+  - infra/garage.yaml
+  - app/config.yaml
+  - app/migrate-job.yaml
+  - app/storage-init-job.yaml
+  - app/api.yaml
+  - app/worker.yaml
+  - app/web.yaml
+  - app/inbox.yaml
+  - app/ingress.yaml
+
+# Same config files as Docker Compose: one source of truth.
+configMapGenerator:
+  - name: rabbitmq-config
+    files:
+      - 20-platform.conf=../../infra/rabbitmq/rabbitmq.conf
+      - definitions.json=../../infra/rabbitmq/definitions.json
+  - name: garage-config
+    files:
+      - garage.toml=../../infra/garage/garage.toml
+  - name: webhook-inbox
+    files:
+      - webhook_receiver.py=../../scripts/webhook_receiver.py
+
+secretGenerator:
+  - name: platform-secrets
+    envs:
+      - secrets.env
+
+images:
+  - name: platform-api
+    newName: k3d-platform-registry.localhost:5050/platform-api
+    newTag: 68555dc-dirty-230121
+  - name: platform-web
+    newName: k3d-platform-registry.localhost:5050/platform-web
+    newTag: 68555dc-dirty-230121
+  - name: platform-worker
+    newName: k3d-platform-registry.localhost:5050/platform-worker
+    newTag: 68555dc-dirty-230121

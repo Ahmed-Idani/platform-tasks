@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector: { app: api }
+  ports: [{ name: http, port: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 2   # stateless; the sweeper, reaper and webhook dispatcher are safe on every replica
+  selector: { matchLabels: { app: api } }
+  template:
+    metadata:
+      labels: { app: api }
+    spec:
+      terminationGracePeriodSeconds: 40   # > the API's own 30 s request drain
+      securityContext: { runAsNonRoot: true }
+      containers:
+        - name: api
+          image: platform-api
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom: [{ configMapRef: { name: platform-config } }]
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: POSTGRES_PASSWORD } }
+            - name: RABBITMQ_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: RABBITMQ_PASSWORD } }
+            - name: DATABASE_URL
+              value: postgres://app:$(POSTGRES_PASSWORD)@postgres:5432/tasks?sslmode=disable
+            - name: RABBITMQ_URL
+              value: amqp://app:$(RABBITMQ_PASSWORD)@rabbitmq:5672/%2F
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_ACCESS_KEY_ID } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_SECRET_ACCESS_KEY } }
+            - { name: CORS_ORIGINS, value: "http://localhost:5173" }   # UI is same-origin behind the Ingress
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }

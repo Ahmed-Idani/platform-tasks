@@ -1,0 +1,27 @@
+# Traefik (bundled with k3s) behind the k3d load balancer: http://localhost:8088
+#   platform.localhost:8088 or localhost:8088   web UI, /v1 and /healthz go to the API
+#   inbox.localhost:8088                        example webhook endpoint
+#   rabbitmq.localhost:8088                     RabbitMQ management console
+# (*.localhost resolves to 127.0.0.1 in browsers, no /etc/hosts needed.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: platform
+spec:
+  ingressClassName: traefik
+  rules:
+    - http: &app
+        paths:
+          - { path: /v1, pathType: Prefix, backend: { service: { name: api, port: { number: 8080 } } } }
+          - { path: /healthz, pathType: Exact, backend: { service: { name: api, port: { number: 8080 } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: web, port: { number: 80 } } } }
+    - host: platform.localhost
+      http: *app
+    - host: inbox.localhost
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: inbox, port: { number: 9000 } } } }
+    - host: rabbitmq.localhost
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: rabbitmq, port: { number: 15672 } } } }

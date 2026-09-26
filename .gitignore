@@ -22,3 +22,6 @@ dist/
 
 # Editor
 .vscode/
+
+# Kubernetes secrets (see deploy/k8s/secrets.env.example)
+deploy/k8s/secrets.env

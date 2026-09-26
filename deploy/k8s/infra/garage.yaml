@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+spec:
+  selector: { app: garage }
+  ports:
+    - { name: s3, port: 3900 }
+    - { name: admin, port: 3903 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: garage
+spec:
+  serviceName: garage
+  replicas: 1
+  selector: { matchLabels: { app: garage } }
+  template:
+    metadata:
+      labels: { app: garage }
+    spec:
+      containers:
+        - name: garage
+          image: dxflrs/garage:v2.3.0
+          command: ["/garage", "server", "--single-node", "--default-bucket"]
+          ports:
+            - { name: s3, containerPort: 3900 }
+            - { name: admin, containerPort: 3903 }
+          env:
+            - { name: GARAGE_DEFAULT_BUCKET, value: platform-tasks-dev }
+            - name: GARAGE_DEFAULT_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_ACCESS_KEY_ID } }
+            - name: GARAGE_DEFAULT_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_SECRET_ACCESS_KEY } }
+            - name: GARAGE_RPC_SECRET
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: GARAGE_RPC_SECRET } }
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: GARAGE_ADMIN_TOKEN } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/garage }
+            - { name: config, mountPath: /etc/garage.toml, subPath: garage.toml }
+          readinessProbe:
+            httpGet: { path: /health, port: admin }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: config
+          configMap: { name: garage-config }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }

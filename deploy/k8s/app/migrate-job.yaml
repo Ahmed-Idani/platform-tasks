@@ -1,0 +1,21 @@
+# Database migrations, once per deploy (goose is baked into the API image).
+# Retries until Postgres accepts connections; scripts/k8s.sh waits for it to complete
+# before rolling out the API.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: goose
+          image: platform-api
+          command: ["/goose", "-dir", "/migrations", "postgres", "$(DATABASE_URL)", "up"]
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: platform-secrets, key: POSTGRES_PASSWORD } }
+            - name: DATABASE_URL
+              value: postgres://app:$(POSTGRES_PASSWORD)@postgres:5432/tasks?sslmode=disable

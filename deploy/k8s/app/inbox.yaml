@@ -1,0 +1,35 @@
+# Example client webhook endpoint (scripts/webhook_receiver.py, mounted from a ConfigMap).
+# From workers and the API: callback_url = http://inbox.platform:9000/hook
+# In the browser: http://inbox.localhost:8088
+apiVersion: v1
+kind: Service
+metadata:
+  name: inbox
+spec:
+  selector: { app: inbox }
+  ports: [{ name: http, port: 9000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inbox
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: inbox } }
+  template:
+    metadata:
+      labels: { app: inbox }
+    spec:
+      containers:
+        - name: inbox
+          image: python:3.12-alpine
+          command: ["python", "-u", "/app/webhook_receiver.py"]
+          ports: [{ name: http, containerPort: 9000 }]
+          volumeMounts:
+            - { name: code, mountPath: /app }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: code
+          configMap: { name: webhook-inbox }

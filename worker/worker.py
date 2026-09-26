@@ -10,6 +10,7 @@ import uuid
 import pika
 
 import db
+import health
 import storage
 import webhook
 
@@ -32,10 +33,12 @@ def log(msg):
   print(f"[{WORKER_ID}] {msg}", flush=True)
 
 
+health.start()  # probes answer 503 during the model load instead of "connection refused"
 log("loading model...")
 _t = time.time()
 from summarizer import MODEL_PATH, summarize  # noqa: E402  (the import IS the model load)
 log(f"model loaded in {time.time() - _t:.1f}s")
+health.model_loaded.set()
 MODEL_NAME = os.getenv("MODEL_NAME") or os.path.splitext(os.path.basename(MODEL_PATH))[0].lower()
 
 
@@ -255,9 +258,11 @@ def consume(stopping, current):
   if stopping.is_set():  # signal arrived while we were connecting
     return
   log(f"waiting for tasks on '{QUEUE}'")
+  health.consuming.set()
   try:
     channel.start_consuming()
   finally:
+    health.consuming.clear()
     current["channel"] = None
     for t in threads:  # the in-flight task always finishes (its result lands in Postgres)
       t.join()

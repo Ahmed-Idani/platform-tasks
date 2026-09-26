@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Model baked into the image (v1 decision): big image, but fast and self-contained startup.
 COPY models/Qwen3-1.7B-Instruct-Q8_0.gguf /models/model.gguf
-COPY summarizer.py worker.py db.py webhook.py storage.py ./
+COPY summarizer.py worker.py db.py webhook.py storage.py health.py ./
 
 ENV MODEL_PATH=/models/model.gguf \
     MODEL_NAME=qwen3-1.7b-instruct-q8_0 \
@@ -27,4 +27,5 @@ ENV MODEL_PATH=/models/model.gguf \
 RUN useradd --create-home app
 USER app
 
+EXPOSE 8081
 CMD ["python", "worker.py"]

@@ -1,0 +1,9 @@
+# Non-secret settings shared by the API, the worker and the Jobs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+data:
+  S3_ENDPOINT_URL: http://garage:3900   # unset this (and use IRSA) for AWS S3
+  S3_BUCKET: platform-tasks-dev
+  AWS_REGION: garage
