@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { CircleAlert, Sparkles, Upload, X } from "lucide-react";
+import { ChevronDown, CircleAlert, ExternalLink, Sparkles, Upload, X } from "lucide-react";
 import { type DragEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MAX_CHARS, MAX_WORDS, type Task, api } from "../lib/api";
@@ -14,7 +14,75 @@ Its control plane runs an API server, a scheduler, a set of controllers and etcd
 Workloads are described declaratively: a Deployment keeps a given number of identical pods running and replaces them during rolling updates, a Service gives a stable address to a changing set of pods, and a HorizontalPodAutoscaler adjusts the replica count from observed metrics. Event-driven autoscalers such as KEDA extend this to external signals like queue depth, and can scale a workload down to zero when there is nothing to do.`;
 
 const WORD_PRESETS = [50, 150, 300];
-const LOCAL_HOOK = "http://host.docker.internal:9000/hook";
+// The example endpoint started by scripts/dev.sh (scripts/webhook_receiver.py, inbox on :9000).
+// A worker in the venv reaches it on localhost; a worker in Docker needs host.docker.internal.
+const RECEIVER_HOSTS = { venv: "localhost", docker: "host.docker.internal" } as const;
+type ReceiverHost = keyof typeof RECEIVER_HOSTS;
+const RECEIVER_PRESETS = [
+  { label: "Inbox: accept", path: "/hook", title: "Answers 204: delivered" },
+  { label: "Inbox: fail 503", path: "/fail/503", title: "Always 503: payload parked in Garage, retried with backoff" },
+];
+
+function readHost(): ReceiverHost {
+  try {
+    return localStorage.getItem("receiverHost") === "docker" ? "docker" : "venv";
+  } catch {
+    return "venv";
+  }
+}
+
+const EXAMPLE_PAYLOAD = `{
+  "event": "task.finished",
+  "task_id": "01a0dfa9-0993-7b01-8ecf-61fe7d2f6c30",
+  "task_type": "llm_inference",
+  "status": "completed",            // or "failed"
+  "attempt": 1,
+  "result": {                       // null when failed
+    "model": "qwen3-1.7b-instruct-q8_0",
+    "summary": "…",
+    "input_tokens": 233, "output_tokens": 68,
+    "seconds": 35.2, "tokens_per_second": 1.93
+  },
+  "error": null,                    // message when failed
+  "completed_at": "2026-09-26T17:17:48.964+00:00"
+}`;
+
+function WebhookContract() {
+  return (
+    <details className="group rounded-md border border-border bg-subtle">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5 text-[13px] font-medium select-none">
+        What will my endpoint receive?
+        <ChevronDown className="size-4 text-faint transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-3 border-t border-border px-3.5 py-3 text-[13px]">
+        <pre className="overflow-x-auto rounded border border-border bg-surface p-2.5 font-mono text-xs leading-relaxed text-muted">
+          <span className="text-fg">POST</span> {"<your callback_url>"}
+          {"\n"}Content-Type: application/json
+          {"\n"}X-Task-Id: {"<task_id>"}
+          {"\n"}User-Agent: platform-tasks-worker | platform-tasks-api
+        </pre>
+        <pre className="max-h-56 overflow-auto rounded border border-border bg-surface p-2.5 font-mono text-xs leading-relaxed text-muted">
+          {EXAMPLE_PAYLOAD}
+        </pre>
+        <ul className="list-disc space-y-1 pl-5 text-muted">
+          <li>
+            Answer any <b className="text-fg">2xx within 10 s</b>; do slow work after answering.
+          </li>
+          <li>
+            <b className="text-fg">Dedupe on X-Task-Id</b>: delivery is at-least-once, a repeat is possible.
+          </li>
+          <li>
+            If you're down, the result is <b className="text-fg">not recomputed</b>: it's retried after 1 m, 5 m, 30 m, 2 h, 6 h,
+            12 h (~21 h), then given up.
+          </li>
+        </ul>
+        <p className="text-xs text-faint">
+          Full contract with example endpoints (Python, Go, Node): <span className="font-mono">docs/webhooks.md</span>
+        </p>
+      </div>
+    </details>
+  );
+}
 
 function validUrl(s: string) {
   try {
@@ -29,6 +97,7 @@ export function NewTaskDialog({ onClose, onCreated }: { onClose: () => void; onC
   const [text, setText] = useState("");
   const [maxWords, setMaxWords] = useState(150);
   const [callback, setCallback] = useState("");
+  const [host, setHost] = useState<ReceiverHost>(readHost);
   const [dragging, setDragging] = useState(false);
   const [touched, setTouched] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -233,15 +302,59 @@ export function NewTaskDialog({ onClose, onCreated }: { onClose: () => void; onC
               {errors.callback ? (
                 <p className="mt-1.5 text-xs text-red">{errors.callback}</p>
               ) : (
-                <p className="mt-1.5 text-xs text-faint">
-                  The worker POSTs the result here when the task finishes.{" "}
-                  <button type="button" onClick={() => setCallback(LOCAL_HOOK)} className="text-muted underline decoration-border-strong underline-offset-2 hover:text-fg">
-                    Use local receiver
-                  </button>
-                </p>
+                <p className="mt-1.5 text-xs text-faint">The platform POSTs the outcome here when the task finishes.</p>
               )}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {RECEIVER_PRESETS.map((p) => {
+                  const url = `http://${RECEIVER_HOSTS[host]}:9000${p.path}`;
+                  return (
+                    <button
+                      key={p.path}
+                      type="button"
+                      title={`${p.title}\n${url}`}
+                      onClick={() => setCallback(url)}
+                      className={clsx(
+                        "h-6 rounded border px-2 text-xs transition-colors",
+                        callback === url ? "border-fg bg-fg text-bg" : "border-border text-muted hover:border-border-strong hover:text-fg",
+                      )}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+                <span className="ml-1 inline-flex overflow-hidden rounded border border-border text-[11px]" title="Where the worker runs decides how it reaches your machine">
+                  {(Object.keys(RECEIVER_HOSTS) as ReceiverHost[]).map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => {
+                        setHost(h);
+                        try {
+                          localStorage.setItem("receiverHost", h);
+                        } catch {
+                          /* not persisted */
+                        }
+                        if (callback.includes(":9000")) setCallback(callback.replace(/\/\/[^:/]+:9000/, `//${RECEIVER_HOSTS[h]}:9000`));
+                      }}
+                      className={clsx("px-1.5 leading-5", host === h ? "bg-hover text-fg" : "text-faint hover:text-fg")}
+                    >
+                      worker: {h}
+                    </button>
+                  ))}
+                </span>
+                <a
+                  href="http://localhost:9000"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-fg"
+                >
+                  Open inbox <ExternalLink className="size-3" />
+                </a>
+              </div>
             </div>
           </div>
+
+          <WebhookContract />
 
           {create.isError && (
             <div className="flex gap-2.5 rounded-md border border-red/25 bg-red-soft px-3.5 py-2.5 text-[13px] text-red">

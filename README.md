@@ -80,7 +80,9 @@ stateDiagram-v2
 | `worker/models/` | GGUF model files (gitignored, copied into the image) |
 | `web/` | React dashboard (Vite + TypeScript + Tailwind) |
 | `infra/` | Config for third-party services: RabbitMQ topology (`definitions.json`), Garage (`garage.toml`) |
-| `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (prints callbacks) |
+| `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (example client endpoint with an inbox page on :9000) |
+| `docs/webhooks.md` | **Webhook contract**: what a client endpoint receives and must answer |
+| `docs/report/` | Final report material: diagrams, screenshots, code images, French notes (see `INVENTORY.md`) |
 | `testdata/` | Sample inputs |
 | `docs/plan/` | Project context, build plan, TODO / decision log |
 | `docs/guides/` | Step-by-step guides |
@@ -104,3 +106,4 @@ scripts/dev.sh down             # stop everything
 | Garage (S3) | http://localhost:3900 (bucket `platform-tasks-dev`) |
 | API | http://localhost:8080 |
 | Web UI | http://localhost:5173 |
+| Webhook inbox (example client endpoint) | http://localhost:9000 |
