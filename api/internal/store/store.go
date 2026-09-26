@@ -1,0 +1,183 @@
+// Package store is the only code that talks to the tasks table.
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var ErrNotFound = errors.New("task not found")
+
+type Task struct {
+	ID            string          `json:"task_id"`
+	TaskType      string          `json:"task_type"`
+	Status        string          `json:"status"`
+	Parameters    json.RawMessage `json:"parameters,omitempty"` // only loaded by Get: the text can be large
+	CallbackURL   *string         `json:"callback_url"`
+	Attempt       int             `json:"attempt"`
+	WorkerID      *string         `json:"worker_id"`
+	Result        json.RawMessage `json:"result"`
+	Error         *string         `json:"error"`
+	CreatedAt     time.Time       `json:"created_at"`
+	QueuedAt      *time.Time      `json:"queued_at"`
+	StartedAt     *time.Time      `json:"started_at"`
+	CompletedAt   *time.Time      `json:"completed_at"`
+	WebhookSentAt *time.Time      `json:"webhook_sent_at"`
+	WebhookError  *string         `json:"webhook_error"`
+}
+
+// Same column order as scan() below.
+const columns = `id::text, task_type, status, callback_url, attempt, worker_id, result, error,
+	created_at, queued_at, started_at, completed_at, webhook_sent_at, webhook_error`
+
+func scan(row pgx.Row, t *Task, extra ...any) error {
+	var result []byte
+	dest := append([]any{
+		&t.ID, &t.TaskType, &t.Status, &t.CallbackURL, &t.Attempt, &t.WorkerID, &result, &t.Error,
+		&t.CreatedAt, &t.QueuedAt, &t.StartedAt, &t.CompletedAt, &t.WebhookSentAt, &t.WebhookError,
+	}, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return err
+	}
+	if result != nil {
+		t.Result = result
+	}
+	return nil
+}
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func New(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+// Create inserts a task in 'pending'. parameters is marshalled to JSONB by pgx.
+func (s *Store) Create(ctx context.Context, taskType string, parameters any, callbackURL *string) (Task, error) {
+	var t Task
+	row := s.pool.QueryRow(ctx,
+		`INSERT INTO tasks (task_type, parameters, callback_url)
+		 VALUES ($1, $2, $3)
+		 RETURNING `+columns,
+		taskType, parameters, callbackURL)
+	if err := scan(row, &t); err != nil {
+		return Task{}, fmt.Errorf("insert task: %w", err)
+	}
+	return t, nil
+}
+
+// MarkQueued moves pending -> queued. Conditional: if a worker already claimed the
+// task (it can be that fast), the row is no longer 'pending' and this is a no-op.
+// Returns the new queued_at, or nil if the row was not 'pending' anymore.
+func (s *Store) MarkQueued(ctx context.Context, id string) (*time.Time, error) {
+	var queuedAt time.Time
+	err := s.pool.QueryRow(ctx,
+		`UPDATE tasks SET status = 'queued', queued_at = now()
+		  WHERE id = $1 AND status = 'pending'
+		  RETURNING queued_at`, id).Scan(&queuedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mark queued: %w", err)
+	}
+	return &queuedAt, nil
+}
+
+func (s *Store) Get(ctx context.Context, id string) (Task, error) {
+	var t Task
+	var params []byte
+	row := s.pool.QueryRow(ctx, `SELECT `+columns+`, parameters FROM tasks WHERE id = $1`, id)
+	if err := scan(row, &t, &params); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Task{}, ErrNotFound
+		}
+		return Task{}, fmt.Errorf("get task: %w", err)
+	}
+	t.Parameters = params
+	return t, nil
+}
+
+type ListFilter struct {
+	Status   string
+	TaskType string
+	Limit    int
+}
+
+func (s *Store) List(ctx context.Context, f ListFilter) ([]Task, error) {
+	var where []string
+	var args []any
+	if f.Status != "" {
+		args = append(args, f.Status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if f.TaskType != "" {
+		args = append(args, f.TaskType)
+		where = append(where, fmt.Sprintf("task_type = $%d", len(args)))
+	}
+	query := `SELECT ` + columns + ` FROM tasks`
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	args = append(args, f.Limit)
+	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, len(args))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := []Task{}
+	for rows.Next() {
+		var t Task
+		if err := scan(rows, &t); err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// StalePending returns tasks stuck in 'pending': inserted, but the publish never
+// happened (API crashed or RabbitMQ was down in between).
+func (s *Store) StalePending(ctx context.Context, olderThan time.Duration, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text FROM tasks
+		  WHERE status = 'pending' AND created_at < now() - make_interval(secs => $1)
+		  ORDER BY created_at
+		  LIMIT $2`, olderThan.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("stale pending: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// CountByStatus returns how many tasks are in each status (0 for empty ones).
+func (s *Store) CountByStatus(ctx context.Context) (map[string]int, error) {
+	counts := map[string]int{
+		"pending": 0, "queued": 0, "running": 0, "completed": 0, "failed": 0, "cancelled": 0,
+	}
+	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM tasks GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("count by status: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		counts[status] = n
+	}
+	return counts, rows.Err()
+}

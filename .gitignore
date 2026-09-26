@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Model weights: too big for git, baked into the worker image instead
+*.gguf
+
+# Runtime output
+worker/results/
+*.tmp
+
+# Go
+api/bin/
+
+# Frontend
+node_modules/
+dist/
+
+# Local tooling
+.claude/settings.local.json
+
+# Editor
+.vscode/

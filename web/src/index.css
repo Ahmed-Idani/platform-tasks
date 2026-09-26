@@ -1,0 +1,152 @@
+@import "tailwindcss";
+
+/* Dark mode is a class on <html>, set by the theme switcher (and index.html before paint). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Geist-style tokens. Components only use these names, never raw colors,
+   so the dark theme is just a second set of values below. */
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-inverted: var(--inverted);
+  --color-inverted-fg: var(--inverted-fg);
+
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-green: var(--green);
+  --color-green-soft: var(--green-soft);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-gray: var(--gray);
+  --color-gray-soft: var(--gray-soft);
+
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+  --animate-slide-in: slide-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-fade-in: fade-in 140ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --subtle: #fafafa;
+  --hover: #f5f5f5;
+  --border: #ebebeb;
+  --border-strong: #d4d4d4;
+  --fg: #171717;
+  --muted: #666666;
+  --faint: #8f8f8f;
+  --inverted: #171717;
+  --inverted-fg: #ffffff;
+
+  --blue: #0068d6;
+  --blue-soft: #ebf5ff;
+  --green: #297a3a;
+  --green-soft: #ebfaeb;
+  --red: #cb2a2f;
+  --red-soft: #ffebeb;
+  --amber: #a35200;
+  --amber-soft: #fff4d6;
+  --gray: #666666;
+  --gray-soft: #f2f2f2;
+
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0a0a0a;
+  --surface: #0f0f0f;
+  --subtle: #111111;
+  --hover: #1a1a1a;
+  --border: #1f1f1f;
+  --border-strong: #2e2e2e;
+  --fg: #ededed;
+  --muted: #a1a1a1;
+  --faint: #707070;
+  --inverted: #ededed;
+  --inverted-fg: #0a0a0a;
+
+  --blue: #52a8ff;
+  --blue-soft: #0d1f33;
+  --green: #62c073;
+  --green-soft: #0f2415;
+  --red: #ff6166;
+  --red-soft: #2e1113;
+  --amber: #f1a10d;
+  --amber-soft: #2b1d05;
+  --gray: #a1a1a1;
+  --gray-soft: #1c1c1c;
+
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: var(--blue-soft);
+  color: var(--fg);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton shimmer: a light band sweeping over a flat block. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--hover);
+  border-radius: 4px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 6%, transparent), transparent);
+  animation: var(--animate-shimmer);
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes slide-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { transform: translateY(6px) scale(0.985); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

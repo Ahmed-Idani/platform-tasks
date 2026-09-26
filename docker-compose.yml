@@ -1,0 +1,61 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    hostname: rabbitmq   # RabbitMQ names its data dir after the hostname; keep it fixed so data survives container re-creation
+    ports:
+      - "5672:5672"    # AMQP, what the worker connects to
+      - "15672:15672"  # web UI
+    environment:
+      RABBITMQ_DEFAULT_USER: app
+      RABBITMQ_DEFAULT_PASS: app
+    volumes:
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-platform.conf:ro
+      - rabbitmq-data:/var/lib/rabbitmq   # queues survive container restarts
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:18
+    container_name: postgres
+    ports:
+      - "5433:5432"    # 5432 on the host is already taken by a local Postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: tasks
+    volumes:
+      - postgres-data:/var/lib/postgresql   # Postgres 18 images keep data under this path (not .../data)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d tasks"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    image: summarizer-worker:dev
+    build: ./worker
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://app:app@rabbitmq:5672/%2F   # "rabbitmq" = the service name, not localhost
+      DATABASE_URL: postgresql://app:app@postgres:5432/tasks   # container port, not the 5433 host mapping
+      N_THREADS: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets callback_url reach a server running on your machine
+    stop_grace_period: 600s   # longer than the longest task, so SIGTERM can finish it
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 3g
+
+volumes:
+  rabbitmq-data:
+  postgres-data:
