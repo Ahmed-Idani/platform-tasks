@@ -1,0 +1,7 @@
+# Teach Kustomize that KEDA's TriggerAuthentication references a Secret, so it rewrites the
+# name to the generated one (platform-secrets-<hash>) like it does for Deployments.
+nameReference:
+  - kind: Secret
+    fieldSpecs:
+      - kind: TriggerAuthentication
+        path: spec/secretTargetRef/name

@@ -50,34 +50,36 @@ function steps(task: Task, now: number): Step[] {
     {
       label: "Queued",
       at: task.queued_at,
-      state: s !== "pending" ? "done" : "current",
+      state: s === "pending" ? "todo" : s === "queued" ? "current" : "done",
       detail:
-        displayStatus(task) === "retrying"
-          ? `Back in the queue after attempt ${task.attempt} failed (retry delay ${RETRY_DELAY_S}s)`
-          : s !== "pending"
-            ? "Published to RabbitMQ"
-            : "Waiting for publish (sweeper retries every 30s)",
-      gap: between(task.created_at, task.queued_at),
+        s === "pending"
+          ? "Waiting for publish (sweeper retries every 30s)"
+          : displayStatus(task) === "retrying"
+            ? `Back in the queue after attempt ${task.attempt} failed (retry delay ${RETRY_DELAY_S}s)`
+            : s === "queued"
+              ? "In RabbitMQ, waiting for a free worker"
+              : "Published to RabbitMQ",
+      gap: s === "queued" ? between(task.queued_at, null, now) : between(task.created_at, task.queued_at),
     },
     {
       label: "Running",
-      at: task.started_at,
-      state: task.started_at && s !== "queued" ? "done" : s === "queued" ? "current" : "todo",
-      detail: task.started_at ? (
-        <>
-          Claimed by <span className="font-mono text-fg">{task.worker_id}</span> · attempt {task.attempt} of {MAX_ATTEMPTS}
-        </>
-      ) : (
-        "Waiting for a free worker"
-      ),
-      gap: between(task.queued_at, s === "queued" ? null : task.started_at, s === "queued" ? now : undefined),
+      at: s === "queued" || s === "pending" ? null : task.started_at,
+      state: s === "running" ? "current" : finished ? "done" : "todo",
+      detail:
+        s === "running" || finished ? (
+          <>
+            {s === "running" ? "Generating on " : "Claimed by "}
+            <span className="font-mono text-fg">{task.worker_id}</span> · attempt {task.attempt} of {MAX_ATTEMPTS}
+          </>
+        ) : undefined,
+      gap: s === "running" ? between(task.started_at, null, now) : finished ? between(task.queued_at, task.started_at) : null,
     },
     {
       label: s === "failed" ? "Failed" : "Completed",
       at: task.completed_at,
-      state: s === "failed" ? "error" : finished ? "done" : s === "running" ? "current" : "todo",
-      detail: s === "running" ? "Generating…" : finished ? "Result written to Postgres" : undefined,
-      gap: between(task.started_at, task.completed_at, s === "running" ? now : undefined),
+      state: s === "failed" ? "error" : s === "completed" ? "done" : "todo",
+      detail: finished ? "Result written to Postgres" : undefined,
+      gap: finished ? between(task.started_at, task.completed_at) : null,
     },
   ];
   const wh = webhookState(task);

@@ -30,9 +30,9 @@ spec:
             - name: RABBITMQ_PASSWORD
               valueFrom: { secretKeyRef: { name: platform-secrets, key: RABBITMQ_PASSWORD } }
             - name: DATABASE_URL
-              value: postgres://app:$(POSTGRES_PASSWORD)@postgres:5432/tasks?sslmode=disable
+              value: postgres://admin:$(POSTGRES_PASSWORD)@postgres:5432/tasks?sslmode=disable
             - name: RABBITMQ_URL
-              value: amqp://app:$(RABBITMQ_PASSWORD)@rabbitmq:5672/%2F
+              value: amqp://admin:$(RABBITMQ_PASSWORD)@rabbitmq:5672/%2F
             - name: AWS_ACCESS_KEY_ID
               valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_ACCESS_KEY_ID } }
             - name: AWS_SECRET_ACCESS_KEY

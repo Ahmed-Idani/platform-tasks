@@ -1,4 +1,6 @@
-"""Tiny HTTP server for Kubernetes probes (and /metrics later), on HEALTH_PORT (8081).
+"""Tiny HTTP server for Kubernetes probes and Prometheus, on HEALTH_PORT (8081).
+
+  /metrics Prometheus metrics (metrics.py).
 
   /livez   503 while the model loads, then 200 while the process runs.
            Used by the startupProbe (generous: the model takes seconds to load) and the
@@ -13,6 +15,8 @@ import http.server
 import os
 import threading
 
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 PORT = int(os.getenv("HEALTH_PORT", "8081"))
 
 model_loaded = threading.Event()
@@ -21,6 +25,13 @@ consuming = threading.Event()
 
 class _Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
+    if self.path == "/metrics":
+      body = generate_latest()
+      self.send_response(200)
+      self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+      self.end_headers()
+      self.wfile.write(body)
+      return
     if self.path == "/livez":
       ok = model_loaded.is_set()
     elif self.path == "/readyz":

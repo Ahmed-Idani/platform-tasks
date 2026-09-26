@@ -14,9 +14,13 @@ Its control plane runs an API server, a scheduler, a set of controllers and etcd
 Workloads are described declaratively: a Deployment keeps a given number of identical pods running and replaces them during rolling updates, a Service gives a stable address to a changing set of pods, and a HorizontalPodAutoscaler adjusts the replica count from observed metrics. Event-driven autoscalers such as KEDA extend this to external signals like queue depth, and can scale a workload down to zero when there is nothing to do.`;
 
 const WORD_PRESETS = [50, 150, 300];
-// The example endpoint started by scripts/dev.sh (scripts/webhook_receiver.py, inbox on :9000).
-// A worker in the venv reaches it on localhost; a worker in Docker needs host.docker.internal.
-const RECEIVER_HOSTS = { venv: "localhost", docker: "host.docker.internal" } as const;
+// The example endpoint (scripts/webhook_receiver.py, port 9000), as each worker reaches it:
+// venv worker -> localhost, Docker worker -> host.docker.internal, Kubernetes -> the inbox Service.
+const RECEIVER_HOSTS = { venv: "localhost", docker: "host.docker.internal", k8s: "inbox.platform" } as const;
+// Where the browser opens the inbox page.
+const INBOX_PAGE = { venv: "http://localhost:9000", docker: "http://localhost:9000", k8s: "http://localhost:8088/inbox/" } as const;
+// scripts/k8s.sh serves the UI behind the Ingress on :8088.
+const ON_K8S = typeof location !== "undefined" && location.port === "8088";
 type ReceiverHost = keyof typeof RECEIVER_HOSTS;
 const RECEIVER_PRESETS = [
   { label: "Inbox: accept", path: "/hook", title: "Answers 204: delivered" },
@@ -24,6 +28,7 @@ const RECEIVER_PRESETS = [
 ];
 
 function readHost(): ReceiverHost {
+  if (ON_K8S) return "k8s";
   try {
     return localStorage.getItem("receiverHost") === "docker" ? "docker" : "venv";
   } catch {
@@ -323,7 +328,7 @@ export function NewTaskDialog({ onClose, onCreated }: { onClose: () => void; onC
                   );
                 })}
                 <span className="ml-1 inline-flex overflow-hidden rounded border border-border text-[11px]" title="Where the worker runs decides how it reaches your machine">
-                  {(Object.keys(RECEIVER_HOSTS) as ReceiverHost[]).map((h) => (
+                  {(Object.keys(RECEIVER_HOSTS) as ReceiverHost[]).filter((h) => (ON_K8S ? h === "k8s" : h !== "k8s")).map((h) => (
                     <button
                       key={h}
                       type="button"
@@ -343,7 +348,7 @@ export function NewTaskDialog({ onClose, onCreated }: { onClose: () => void; onC
                   ))}
                 </span>
                 <a
-                  href="http://localhost:9000"
+                  href={INBOX_PAGE[host]}
                   target="_blank"
                   rel="noreferrer"
                   className="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-fg"

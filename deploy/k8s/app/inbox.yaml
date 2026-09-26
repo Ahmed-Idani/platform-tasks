@@ -1,6 +1,4 @@
-# Example client webhook endpoint (scripts/webhook_receiver.py, mounted from a ConfigMap).
-# From workers and the API: callback_url = http://inbox.platform:9000/hook
-# In the browser: http://inbox.localhost:8088
+# Example webhook endpoint. callback_url from the cluster: http://inbox.platform:9000/hook
 apiVersion: v1
 kind: Service
 metadata:

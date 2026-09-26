@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: api
+  namespace: platform
+spec:
+  selector: { matchLabels: { app: api } }
+  podMetricsEndpoints:
+    - { port: http, path: /metrics, interval: 15s }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: worker
+  namespace: platform
+spec:
+  selector: { matchLabels: { app: worker } }
+  podMetricsEndpoints:
+    - { port: health, path: /metrics, interval: 15s }
+---
+# RabbitMQ's built-in Prometheus plugin. /metrics is node-wide; /metrics/detailed gives the
+# per-queue numbers we need (ready / unacked / consumers for main, retry and DLQ).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: rabbitmq
+  namespace: platform
+spec:
+  selector: { matchLabels: { app: rabbitmq } }
+  podMetricsEndpoints:
+    - { port: prometheus, path: /metrics, interval: 30s }
+    - port: prometheus
+      path: /metrics/detailed
+      interval: 15s
+      params:
+        family: [queue_coarse_metrics, queue_consumer_count]

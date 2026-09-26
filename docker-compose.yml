@@ -7,8 +7,8 @@ services:
       - "5672:5672"    # AMQP, what the worker connects to
       - "15672:15672"  # web UI
     environment:
-      RABBITMQ_DEFAULT_USER: app
-      RABBITMQ_DEFAULT_PASS: app
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
     volumes:
       - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-platform.conf:ro
       - ./infra/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
@@ -25,13 +25,13 @@ services:
     ports:
       - "5433:5432"    # 5432 on the host is already taken by a local Postgres
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
       POSTGRES_DB: tasks
     volumes:
       - postgres-data:/var/lib/postgresql   # Postgres 18 images keep data under this path (not .../data)
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d tasks"]
+      test: ["CMD-SHELL", "pg_isready -U admin -d tasks"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -46,7 +46,7 @@ services:
     environment:
       # Dev-only credentials. Access key id format: GK + 24 hex; secret: 64 hex.
       GARAGE_RPC_SECRET: "6465762d6f6e6c792d7270632d7365637265742d706c6174666f726d2d746b73"
-      GARAGE_ADMIN_TOKEN: dev-admin-token
+      GARAGE_ADMIN_TOKEN: admin
       GARAGE_DEFAULT_ACCESS_KEY: GK706c6174666f726d2d746b73
       GARAGE_DEFAULT_SECRET_KEY: "6465762d6f6e6c792d73332d7365637265742d706c6174666f726d2d7461736b"
       GARAGE_DEFAULT_BUCKET: platform-tasks-dev
@@ -72,8 +72,8 @@ services:
       garage:
         condition: service_healthy
     environment:
-      RABBITMQ_URL: amqp://app:app@rabbitmq:5672/%2F   # "rabbitmq" = the service name, not localhost
-      DATABASE_URL: postgresql://app:app@postgres:5432/tasks   # container port, not the 5433 host mapping
+      RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672/%2F   # "rabbitmq" = the service name, not localhost
+      DATABASE_URL: postgresql://admin:admin@postgres:5432/tasks   # container port, not the 5433 host mapping
       S3_ENDPOINT_URL: http://garage:3900
       S3_BUCKET: platform-tasks-dev
       AWS_REGION: garage

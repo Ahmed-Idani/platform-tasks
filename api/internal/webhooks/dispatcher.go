@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"platform-tasks/api/internal/metrics"
 	"platform-tasks/api/internal/storage"
 	"platform-tasks/api/internal/store"
 )
@@ -77,9 +78,11 @@ func deliver(ctx context.Context, st *store.Store, objects *storage.Storage, w s
 	if err := post(ctx, w.CallbackURL, w.ID, body); err != nil {
 		msg := fmt.Sprintf("attempt %d: %v", attempt, err)
 		if next, ok := backoff[attempt]; ok {
+			metrics.WebhookDispatch.WithLabelValues("retry").Inc()
 			log.Warn("webhooks: delivery failed, will retry", "err", err, "in", next)
 			record(ctx, st, w.ID, msg, &next)
 		} else {
+			metrics.WebhookDispatch.WithLabelValues("gave_up").Inc()
 			log.Error("webhooks: delivery failed, giving up", "err", err)
 			record(ctx, st, w.ID, msg+" (gave up)", nil)
 		}
@@ -96,6 +99,7 @@ func deliver(ctx context.Context, st *store.Store, objects *storage.Storage, w s
 	if err := objects.Delete(ctx, w.Ref); err != nil {
 		log.Warn("webhooks: could not delete parked payload (lifecycle will)", "err", err)
 	}
+	metrics.WebhookDispatch.WithLabelValues("delivered").Inc()
 	log.Info("webhooks: delivered from object storage")
 }
 

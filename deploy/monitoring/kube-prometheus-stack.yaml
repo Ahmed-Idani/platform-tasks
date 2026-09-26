@@ -1,0 +1,67 @@
+
+grafana:
+  adminPassword: admin
+  ingress: { enabled: false }     # see ingress.yaml
+  defaultDashboardsTimezone: browser
+  grafana.ini:
+    server:
+      root_url: http://localhost:8088/grafana/
+      serve_from_sub_path: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring:3100
+  # 384 MiB got it OOMKilled.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+prometheus:
+  ingress: { enabled: false }
+  prometheusSpec:
+    routePrefix: /prometheus
+    externalUrl: http://localhost:8088/prometheus
+    # Select every ServiceMonitor / PodMonitor / PrometheusRule, not only the chart's own.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    scrapeInterval: 15s
+    retention: 3d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources: { requests: { storage: 5Gi } }
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits: { memory: 1536Mi }
+
+alertmanager:
+  ingress: { enabled: false }
+  alertmanagerSpec:
+    routePrefix: /alertmanager
+    externalUrl: http://localhost:8088/alertmanager
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
+# Not separate processes on k3s.
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+kubeEtcd: { enabled: false }
+
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { memory: 64Mi }

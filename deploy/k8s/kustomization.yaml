@@ -1,8 +1,10 @@
-# Rendered by scripts/k8s.sh with --load-restrictor LoadRestrictionsNone, because the
-# config files are shared with Docker Compose (../../infra) instead of copied.
+# Needs --load-restrictor LoadRestrictionsNone: config files are shared with Docker Compose.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: platform
+
+configurations:
+  - kustomizeconfig.yaml
 
 resources:
   - namespace.yaml
@@ -14,6 +16,7 @@ resources:
   - app/storage-init-job.yaml
   - app/api.yaml
   - app/worker.yaml
+  - app/worker-autoscaling.yaml
   - app/web.yaml
   - app/inbox.yaml
   - app/ingress.yaml
@@ -24,6 +27,8 @@ configMapGenerator:
     files:
       - 20-platform.conf=../../infra/rabbitmq/rabbitmq.conf
       - definitions.json=../../infra/rabbitmq/definitions.json
+    literals:
+      - 30-k8s.conf=management.path_prefix = /rabbitmq
   - name: garage-config
     files:
       - garage.toml=../../infra/garage/garage.toml
@@ -39,10 +44,10 @@ secretGenerator:
 images:
   - name: platform-api
     newName: k3d-platform-registry.localhost:5050/platform-api
-    newTag: 68555dc-dirty-230121
+    newTag: 08dadca-dirty-235448
   - name: platform-web
     newName: k3d-platform-registry.localhost:5050/platform-web
-    newTag: 68555dc-dirty-230121
+    newTag: 08dadca-dirty-000226
   - name: platform-worker
     newName: k3d-platform-registry.localhost:5050/platform-worker
-    newTag: 68555dc-dirty-230121
+    newTag: 08dadca-dirty-235448

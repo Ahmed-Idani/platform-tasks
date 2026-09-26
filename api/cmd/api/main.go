@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-tasks/api/internal/httpapi"
+	"platform-tasks/api/internal/metrics"
 	"platform-tasks/api/internal/queue"
 	"platform-tasks/api/internal/storage"
 	"platform-tasks/api/internal/store"
@@ -40,8 +41,8 @@ func getenv(key, fallback string) string {
 
 func run() error {
 	addr := getenv("HTTP_ADDR", ":8080")
-	databaseURL := getenv("DATABASE_URL", "postgres://app:app@localhost:5433/tasks?sslmode=disable")
-	rabbitURL := getenv("RABBITMQ_URL", "amqp://app:app@localhost:5672/%2F")
+	databaseURL := getenv("DATABASE_URL", "postgres://admin:admin@localhost:5433/tasks?sslmode=disable")
+	rabbitURL := getenv("RABBITMQ_URL", "amqp://admin:admin@localhost:5672/%2F")
 	corsOrigins := strings.Split(getenv("CORS_ORIGINS", "http://localhost:5173"), ",")
 
 	// ctx is cancelled on the first SIGINT/SIGTERM. That is the shutdown trigger.
@@ -69,6 +70,7 @@ func run() error {
 	}
 
 	st := store.New(pool)
+	metrics.RegisterTaskCounts(st.CountByStatus)
 
 	var wg sync.WaitGroup
 	wg.Go(func() { sweeper.Run(ctx, st, pub) })

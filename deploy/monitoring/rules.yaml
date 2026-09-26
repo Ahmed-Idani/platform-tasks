@@ -1,0 +1,57 @@
+# Alerts: only conditions that deserve a human's attention.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform
+  namespace: platform
+spec:
+  groups:
+    - name: platform.rules
+      rules:
+        - alert: PlatformDeadLetterQueueNotEmpty
+          expr: max(rabbitmq_detailed_queue_messages_ready{queue="tasks.llm_inference.dlq"}) > 0
+          for: 1m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} message(s) in the dead-letter queue"
+            description: "Tasks failed for good (permanent error or 3 attempts). Inspect tasks.llm_inference.dlq and the failed tasks in the UI."
+        - alert: PlatformQueueBacklog
+          expr: max(rabbitmq_detailed_queue_messages_ready{queue="tasks.llm_inference"}) > 20
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} tasks waiting for 10 minutes"
+            description: "Workers can't keep up (or autoscaling is capped). Check worker replicas and CPU."
+        - alert: PlatformNoWorkers
+          expr: >
+            max(rabbitmq_detailed_queue_messages_ready{queue="tasks.llm_inference"}) > 0
+            and on() max(rabbitmq_detailed_queue_consumers{queue="tasks.llm_inference"}) == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "Tasks are queued but no worker is consuming"
+            description: "Worker pods down, crash-looping, or not scaled up."
+        - alert: PlatformQueueWaitHigh
+          expr: histogram_quantile(0.95, sum by (le) (rate(task_queue_wait_seconds_bucket[10m]))) > 300
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "p95 queue wait above 5 minutes"
+            description: "Tasks wait too long for a worker (backlog or slow cold starts)."
+        - alert: PlatformTaskFailures
+          expr: sum(increase(worker_task_outcomes_total{outcome="failed"}[15m])) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value }} tasks failed in the last 15 minutes"
+        - alert: PlatformWebhookGaveUp
+          expr: sum(increase(api_webhook_dispatch_total{result="gave_up"}[1h])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "A webhook was given up after 7 attempts"
+            description: "A client endpoint stayed down ~21 h; its payload expires from object storage after 7 days."
+        - alert: PlatformWorkerRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="platform",container="worker"}[15m]) > 2
+          labels: { severity: warning }
+          annotations:
+            summary: "Worker {{ $labels.pod }} restarted {{ $value }} times in 15 minutes"
+            description: "Likely OOMKilled (memory limit) or failing its liveness probe."

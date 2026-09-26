@@ -119,7 +119,7 @@ def page():
  <code>http://host.docker.internal:{PORT}/hook</code> · accepted (worker in Docker)<br>
  <code>…/fail/503</code> · always answers 503: the platform parks the payload and retries with backoff<br>
  <code>…/slow</code> · answers after 15 s, past the platform's 10 s timeout<br>
- Contract: <code>docs/webhooks.md</code> · raw JSON: <a style="color:#52a8ff" href="/deliveries">/deliveries</a>
+ Contract: <code>docs/webhooks.md</code> · raw JSON: <a style="color:#52a8ff" href="deliveries">/deliveries</a>
 </div>
 {body}
 </main></body></html>"""

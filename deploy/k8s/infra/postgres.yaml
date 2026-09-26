@@ -25,17 +25,17 @@ spec:
           image: postgres:18
           ports: [{ name: postgres, containerPort: 5432 }]
           env:
-            - { name: POSTGRES_USER, value: app }
+            - { name: POSTGRES_USER, value: admin }
             - { name: POSTGRES_DB, value: tasks }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: platform-secrets, key: POSTGRES_PASSWORD } }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql }
           readinessProbe:
-            exec: { command: ["pg_isready", "-U", "app", "-d", "tasks"] }
+            exec: { command: ["pg_isready", "-U", "admin", "-d", "tasks"] }
             periodSeconds: 5
           livenessProbe:
-            exec: { command: ["pg_isready", "-U", "app", "-d", "tasks"] }
+            exec: { command: ["pg_isready", "-U", "admin", "-d", "tasks"] }
             initialDelaySeconds: 20
             periodSeconds: 10
           resources:

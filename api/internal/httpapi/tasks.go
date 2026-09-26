@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"platform-tasks/api/internal/metrics"
 	"platform-tasks/api/internal/store"
 )
 
@@ -103,6 +104,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
+	metrics.TasksCreated.Inc()
 	task = s.enqueue(r.Context(), task)
 	slog.Info("task created", "task_id", task.ID, "status", task.Status)
 	writeJSON(w, http.StatusAccepted, task)
@@ -115,6 +117,7 @@ func (s *Server) enqueue(ctx context.Context, task store.Task) store.Task {
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.pub.Publish(pubCtx, task.TaskType, task.ID); err != nil {
+		metrics.PublishFailures.Inc()
 		slog.Warn("publish failed, sweeper will retry", "task_id", task.ID, "err", err)
 	} else if queuedAt, err := s.store.MarkQueued(ctx, task.ID); err != nil {
 		slog.Warn("mark queued failed", "task_id", task.ID, "err", err)

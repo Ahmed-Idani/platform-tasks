@@ -79,6 +79,8 @@ stateDiagram-v2
 | `worker/` | Python worker: consumes the queue, runs the model |
 | `worker/models/` | GGUF model files (gitignored, copied into the image) |
 | `web/` | React dashboard (Vite + TypeScript + Tailwind) |
+| `deploy/k8s/` | Kubernetes manifests (Kustomize): StatefulSets, Deployments, Jobs, KEDA ScaledObject, Ingress |
+| `deploy/monitoring/` | Prometheus/Grafana/Loki values, PodMonitors, alert rules, dashboard generator |
 | `infra/` | Config for third-party services: RabbitMQ topology (`definitions.json`), Garage (`garage.toml`) |
 | `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (example client endpoint with an inbox page on :9000) |
 | `docs/webhooks.md` | **Webhook contract**: what a client endpoint receives and must answer |
@@ -86,6 +88,29 @@ stateDiagram-v2
 | `testdata/` | Sample inputs |
 | `docs/plan/` | Project context, build plan, TODO / decision log |
 | `docs/guides/` | Step-by-step guides |
+
+## Run on Kubernetes (k3s via k3d)
+
+```bash
+scripts/k8s.sh all          # cluster + images + platform + monitoring (first run: ~10 min)
+scripts/k8s.sh build web    # rebuild one component, then: scripts/k8s.sh deploy
+scripts/k8s.sh status
+scripts/k8s.sh down
+```
+
+Everything is behind one address, **http://localhost:8088**, login **admin / admin**:
+
+| Service | URL |
+|---|---|
+| Web UI | http://localhost:8088/ |
+| Webhook inbox | http://localhost:8088/inbox/ (callback_url from the cluster: `http://inbox.platform:9000/hook`) |
+| RabbitMQ | http://localhost:8088/rabbitmq/ |
+| Grafana, "Platform tasks" dashboard | http://localhost:8088/grafana/d/platform-tasks/platform-tasks |
+| Grafana logs (Loki) | http://localhost:8088/grafana/explore |
+| Prometheus | http://localhost:8088/prometheus/ |
+| Alertmanager | http://localhost:8088/alertmanager/ |
+
+Workers scale on queue depth with KEDA, from 0 to 4.
 
 ## Run locally
 
@@ -101,8 +126,8 @@ scripts/dev.sh down             # stop everything
 
 | Service | URL |
 |---|---|
-| RabbitMQ UI | http://localhost:15672 (`app` / `app`) |
-| Postgres | `localhost:5433` (`app` / `app`, db `tasks`) |
+| RabbitMQ UI | http://localhost:15672 (`admin` / `admin`) |
+| Postgres | `localhost:5433` (`admin` / `admin`, db `tasks`) |
 | Garage (S3) | http://localhost:3900 (bucket `platform-tasks-dev`) |
 | API | http://localhost:8080 |
 | Web UI | http://localhost:5173 |

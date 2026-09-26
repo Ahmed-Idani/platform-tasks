@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app@localhost:5433/tasks")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin@localhost:5433/tasks")
 
 # A 'running' task whose heartbeat is older than this is considered abandoned
 # (its worker died) and may be claimed again.
@@ -63,7 +63,8 @@ def claim(task_id, worker_id):
        WHERE id = %(id)s
          AND (status IN ('pending', 'queued')
               OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %(stale)s)))
-      RETURNING task_type, parameters, callback_url, attempt, error
+      RETURNING task_type, parameters, callback_url, attempt, error,
+                extract(epoch FROM now() - queued_at)::float AS queue_wait_s
       """,
       {"id": task_id, "worker": worker_id, "stale": STALE_AFTER_S},
     ).fetchone()

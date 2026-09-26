@@ -94,7 +94,7 @@ docker compose up -d --wait rabbitmq postgres garage
 
 say "running migrations"
 export GOOSE_DRIVER=postgres
-export GOOSE_DBSTRING="postgres://app:app@localhost:5433/tasks?sslmode=disable"
+export GOOSE_DBSTRING="postgres://admin:admin@localhost:5433/tasks?sslmode=disable"
 export GOOSE_MIGRATION_DIR=api/migrations
 if command -v goose >/dev/null; then GOOSE=goose
 elif [[ -x "$HOME/go/bin/goose" ]]; then GOOSE="$HOME/go/bin/goose"
@@ -149,8 +149,8 @@ cat <<EOF
 
   ${bold}Web UI${reset}        http://localhost:5173
   ${bold}API${reset}           http://localhost:8080
-  ${bold}RabbitMQ UI${reset}   http://localhost:15672   ${dim}(app / app)${reset}
-  ${bold}Postgres${reset}      localhost:5433           ${dim}(app / app, db tasks)${reset}
+  ${bold}RabbitMQ UI${reset}   http://localhost:15672   ${dim}(admin / admin)${reset}
+  ${bold}Postgres${reset}      localhost:5433           ${dim}(admin / admin, db tasks)${reset}
   ${bold}Garage (S3)${reset}   http://localhost:3900    ${dim}(bucket platform-tasks-dev)${reset}
   ${bold}Webhooks${reset}      http://host.docker.internal:9000/hook ${dim}(worker in Docker)${reset}
                 http://localhost:9000/hook            ${dim}(worker local)${reset}

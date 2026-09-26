@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"platform-tasks/api/internal/metrics"
 	"platform-tasks/api/internal/queue"
 	"platform-tasks/api/internal/store"
 )
@@ -39,7 +40,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	return s.cors(logRequests(mux))
+	mux.Handle("GET /metrics", metrics.Handler()) // not routed by the Ingress: in-cluster scraping only
+	return s.cors(logRequests(metrics.Instrument(mux)))
 }
 
 // cors lets the web UI (a different origin in dev: localhost:5173) call the API.
@@ -74,6 +76,9 @@ func logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+			return // probes and scrapes every few seconds would drown the real requests
+		}
 		slog.Info("http", "method", r.Method, "path", r.URL.Path, "status", rec.status,
 			"ms", time.Since(start).Milliseconds())
 	})

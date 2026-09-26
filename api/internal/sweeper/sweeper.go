@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"time"
 
+	"platform-tasks/api/internal/metrics"
 	"platform-tasks/api/internal/queue"
 	"platform-tasks/api/internal/store"
 )
@@ -58,6 +59,7 @@ func sweepPending(ctx context.Context, st *store.Store, pub *queue.Publisher) {
 			slog.Error("sweeper: mark queued", "task_id", ref.ID, "err", err)
 			continue
 		}
+		metrics.SweeperRepublished.Inc()
 		slog.Info("sweeper: republished stranded task", "task_id", ref.ID)
 	}
 }
@@ -69,6 +71,7 @@ func reapStale(ctx context.Context, st *store.Store, pub *queue.Publisher) {
 		return
 	}
 	for _, ref := range refs {
+		metrics.ReaperRequeued.Inc()
 		slog.Warn("reaper: task's worker stopped heartbeating, requeueing", "task_id", ref.ID)
 		// Back in 'pending': if this publish fails, sweepPending picks it up later.
 		if err := pub.Publish(ctx, ref.TaskType, ref.ID); err != nil {

@@ -1,14 +1,14 @@
 {
   "users": [
     {
-      "name": "app",
-      "password_hash": "4xbqcMx2SdW3laWw183eaMYN6YAirSYEutb8tZRCKcg0UhFW",
+      "name": "admin",
+      "password_hash": "dFVHdAyK3rwm984kT3jDgET+hspQ09bvM8Y0S+YHE4cBlZGN",
       "hashing_algorithm": "rabbit_password_hashing_sha256",
       "tags": ["administrator"]
     }
   ],
   "vhosts": [{ "name": "/" }],
-  "permissions": [{ "user": "app", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }],
+  "permissions": [{ "user": "admin", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }],
 
   "exchanges": [
     { "name": "tasks",       "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },

@@ -3,17 +3,15 @@ kind: Deployment
 metadata:
   name: worker
 spec:
-  replicas: 2   # fixed for Stage 6; KEDA takes over in Stage 7 (queue depth, down to zero)
+  # replicas: owned by KEDA (worker-autoscaling.yaml)
   selector: { matchLabels: { app: worker } }
   strategy:
-    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }   # never drop capacity during a rollout
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
   template:
     metadata:
       labels: { app: worker }
     spec:
-      # Longer than the longest task (TASK_TIMEOUT_S = 540): on SIGTERM the worker stops
-      # consuming, finishes its current generation, acks, then exits. Kubernetes only
-      # SIGKILLs after this, so scale-down and rollouts don't kill work mid-flight.
+      # > TASK_TIMEOUT_S: on SIGTERM the worker finishes its current task before exiting.
       terminationGracePeriodSeconds: 600
       containers:
         - name: worker
@@ -21,26 +19,23 @@ spec:
           ports: [{ name: health, containerPort: 8081 }]
           envFrom: [{ configMapRef: { name: platform-config } }]
           env:
-            - name: WORKER_ID      # shows which pod ran a task (worker_id column, UI)
+            - name: WORKER_ID
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: platform-secrets, key: POSTGRES_PASSWORD } }
             - name: RABBITMQ_PASSWORD
               valueFrom: { secretKeyRef: { name: platform-secrets, key: RABBITMQ_PASSWORD } }
             - name: DATABASE_URL
-              value: postgresql://app:$(POSTGRES_PASSWORD)@postgres:5432/tasks
+              value: postgresql://admin:$(POSTGRES_PASSWORD)@postgres:5432/tasks
             - name: RABBITMQ_URL
-              value: amqp://app:$(RABBITMQ_PASSWORD)@rabbitmq:5672/%2F
+              value: amqp://admin:$(RABBITMQ_PASSWORD)@rabbitmq:5672/%2F
             - name: AWS_ACCESS_KEY_ID
               valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_ACCESS_KEY_ID } }
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: platform-secrets, key: S3_SECRET_ACCESS_KEY } }
-            - { name: N_THREADS, value: "2" }        # = the CPU limit below, or cgroup throttling
+            - { name: N_THREADS, value: "2" }   # must equal the CPU limit
             - { name: TASK_TIMEOUT_S, value: "540" }
-          # The model takes seconds to load: /livez is 503 until it's resident. The startup
-          # probe allows up to 2 min for that; only then does the liveness probe start.
-          # A plain liveness probe here would kill pods mid-load (a crash loop that looks
-          # like a broken image).
+          # Up to 2 min to load the model before liveness applies (else: crash loop mid-load).
           startupProbe:
             httpGet: { path: /livez, port: health }
             periodSeconds: 2
@@ -50,13 +45,11 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          # Ready = connected to RabbitMQ and consuming. Gates rolling updates (maxUnavailable 0).
           readinessProbe:
             httpGet: { path: /readyz, port: health }
             periodSeconds: 5
             timeoutSeconds: 5
-          # Measured: ~1.05 GiB resident with the model loaded; the KV cache grows with the
-          # input (n_ctx 8192). Requests = what the scheduler reserves; limits = the ceiling.
+          # Measured ~1.05 GiB resident + KV cache (grows with the input).
           resources:
-            requests: { cpu: "2", memory: 1536Mi }
+            requests: { cpu: "2", memory: 1200Mi }
             limits: { cpu: "2", memory: 3Gi }

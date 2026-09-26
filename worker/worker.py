@@ -11,10 +11,11 @@ import pika
 
 import db
 import health
+import metrics
 import storage
 import webhook
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://app:app@localhost:5672/%2F")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://admin:admin@localhost:5672/%2F")
 TASK_TYPE = "llm_inference"
 QUEUE = f"tasks.{TASK_TYPE}"          # topology comes from infra/rabbitmq/definitions.json
 DEAD_EXCHANGE = "tasks.dlx"           # -> tasks.llm_inference.dlq
@@ -38,6 +39,7 @@ log("loading model...")
 _t = time.time()
 from summarizer import MODEL_PATH, summarize  # noqa: E402  (the import IS the model load)
 log(f"model loaded in {time.time() - _t:.1f}s")
+metrics.MODEL_LOAD.set(time.time() - _t)
 health.model_loaded.set()
 MODEL_NAME = os.getenv("MODEL_NAME") or os.path.splitext(os.path.basename(MODEL_PATH))[0].lower()
 
@@ -51,6 +53,11 @@ def process(params):
   if len(text) > MAX_CHARS:
     raise PermanentError(f"text too long: {len(text)} chars, max {MAX_CHARS}")
   out = summarize(text, params.get("max_words", 150), deadline=time.time() + TASK_TIMEOUT_S)
+  metrics.INFERENCE.labels(MODEL_NAME).observe(out["seconds"])
+  metrics.TOKENS.labels(MODEL_NAME, "input").inc(out["input_tokens"])
+  metrics.TOKENS.labels(MODEL_NAME, "output").inc(out["output_tokens"])
+  if out["seconds"]:
+    metrics.TOKENS_PER_SECOND.labels(MODEL_NAME).observe(out["output_tokens"] / out["seconds"])
   return {
     "model": MODEL_NAME,
     "summary": out["summary"],
@@ -115,15 +122,18 @@ def deliver_webhook(task_id, row):
   try:
     if error is None:
       db.persistent(db.webhook_sent, task_id)
+      metrics.WEBHOOK_DIRECT.labels("sent").inc()
       log(f"webhook {task_id}: sent")
       return
     try:
       ref = storage.put_json(f"webhooks/{task_id}.json", body)
     except Exception as e:
       db.persistent(db.webhook_failed, task_id, f"{error}; could not park payload: {e!r}")
+      metrics.WEBHOOK_DIRECT.labels("failed").inc()
       log(f"webhook {task_id}: FAILED ({error}) and could not park it: {e!r}")
       return
     db.persistent(db.webhook_parked, task_id, ref, error, WEBHOOK_FIRST_RETRY_S)
+    metrics.WEBHOOK_DIRECT.labels("parked").inc()
     log(f"webhook {task_id}: client unreachable ({error}); parked at {ref}, API retries in {WEBHOOK_FIRST_RETRY_S}s")
   except Exception as e:
     log(f"webhook {task_id}: could not record delivery state: {e!r}")
@@ -135,6 +145,7 @@ def fail(task_id, error):
   if row is None:
     log(f"{task_id}: lost ownership, not failing it")
     return "ack", None
+  metrics.OUTCOMES.labels("failed").inc()
   deliver_webhook(task_id, row)
   return "dead", error
 
@@ -148,12 +159,14 @@ def run_task(task_id):
     row = db.get(task_id)
     if row is None:
       log(f"{task_id}: unknown task, dropping message")
+      metrics.OUTCOMES.labels("duplicate").inc()
       return "ack", None
     if row["status"] == "running" and row["alive"]:
       # A redelivery while the previous owner is still heartbeating (its RabbitMQ
       # connection dropped but the process lives). Look again after the retry delay:
       # by then that worker has finished, or its heartbeat is stale and we take over.
       log(f"{task_id}: still running elsewhere, checking again after the retry delay")
+      metrics.OUTCOMES.labels("retry").inc()
       return "retry", None
     if (row["status"] in ("completed", "failed") and row["callback_url"]
         and row["webhook_sent_at"] is None and row["webhook_attempts"] == 0):
@@ -163,6 +176,7 @@ def run_task(task_id):
       deliver_webhook(task_id, row)
       return "ack", None
     log(f"{task_id}: already {row['status']}, dropping duplicate message")
+    metrics.OUTCOMES.labels("duplicate").inc()
     return "ack", None
 
   attempt = task["attempt"]
@@ -173,6 +187,9 @@ def run_task(task_id):
     return fail(task_id, f"gave up after {MAX_ATTEMPTS} attempts; last: {task.get('error') or 'worker lost'}")
 
   log(f"start {task_id} (attempt {attempt}/{MAX_ATTEMPTS})")
+  if task["queue_wait_s"] is not None:
+    metrics.QUEUE_WAIT.observe(max(task["queue_wait_s"], 0))
+  metrics.BUSY.set(1)
   stop = threading.Event()
   beat = threading.Thread(target=heartbeat_loop, args=(task_id, stop), daemon=True)
   beat.start()
@@ -191,10 +208,12 @@ def run_task(task_id):
     if not db.persistent(db.requeue_for_retry, task_id, WORKER_ID, error):
       log(f"{task_id}: lost ownership, dropping")
       return "ack", None
+    metrics.OUTCOMES.labels("retry").inc()
     return "retry", error
   finally:
     stop.set()
     beat.join()
+    metrics.BUSY.set(0)
 
   # Rides out a Postgres outage: the summary cost minutes of CPU, don't throw it away.
   row = db.persistent(db.finish, task_id, WORKER_ID, "completed", result=result)
@@ -202,6 +221,7 @@ def run_task(task_id):
     log(f"{task_id}: lost ownership while running (heartbeat went stale), result discarded")
     return "ack", None
   log(f"done {task_id} in {result['seconds']}s")
+  metrics.OUTCOMES.labels("completed").inc()
   deliver_webhook(task_id, row)
   return "ack", None
 
@@ -228,6 +248,7 @@ def handle(connection, channel, delivery_tag, body):
     # Postgres unreachable at claim time (or for longer than db.PERSIST_FOR_S):
     # don't lose the message, try again after the retry delay.
     log(f"{task_id}: infrastructure error {e!r}, retry in ~30s")
+    metrics.OUTCOMES.labels("retry").inc()
     outcome, error = "retry", repr(e)
 
   # Everything durable is in Postgres now; only THEN settle the message.

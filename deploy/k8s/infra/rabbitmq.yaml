@@ -31,7 +31,7 @@ spec:
             - { name: management, containerPort: 15672 }
             - { name: prometheus, containerPort: 15692 }
           env:
-            - { name: RABBITMQ_DEFAULT_USER, value: app }
+            - { name: RABBITMQ_DEFAULT_USER, value: admin }
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom: { secretKeyRef: { name: platform-secrets, key: RABBITMQ_PASSWORD } }
           volumeMounts:
@@ -39,6 +39,7 @@ spec:
             # Same files as Docker Compose: consumer_timeout + topology (exchanges, queues, DLX).
             - { name: config, mountPath: /etc/rabbitmq/conf.d/20-platform.conf, subPath: 20-platform.conf }
             - { name: config, mountPath: /etc/rabbitmq/definitions.json, subPath: definitions.json }
+            - { name: config, mountPath: /etc/rabbitmq/conf.d/30-k8s.conf, subPath: 30-k8s.conf }
           readinessProbe:
             exec: { command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"] }
             initialDelaySeconds: 10
