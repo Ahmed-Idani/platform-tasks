@@ -3,7 +3,8 @@ import re
 import sys
 import time
 
-from llama_cpp import Llama
+import numpy as np
+from llama_cpp import Llama, LogitsProcessorList
 
 import os
 
@@ -17,8 +18,23 @@ llm = Llama(
 )
 
 
-def summarize(text: str, max_words: int = 150) -> dict:
+def summarize(text: str, max_words: int = 150, deadline: float | None = None) -> dict:
+  """deadline: time.time() value after which generation stops and TimeoutError is raised."""
   start = time.time()
+  timed_out = False
+
+  # Called before every generated token. It runs inside a ctypes callback, where raising
+  # an exception is silently swallowed, so instead, past the deadline, it makes
+  # end-of-sequence the only possible next token: generation ends on the next step.
+  # (Prefill, reading the input, can't be interrupted; it is bounded by MAX_CHARS.)
+  def enforce_deadline(_input_ids, scores):
+    nonlocal timed_out
+    if deadline is not None and time.time() > deadline:
+      timed_out = True
+      scores[:] = -np.inf
+      scores[llm.token_eos()] = 0.0
+    return scores
+
   output = llm.create_chat_completion(
     messages=[
       {"role": "system", "content": "You summarize documents accurately and concisely."},
@@ -26,7 +42,10 @@ def summarize(text: str, max_words: int = 150) -> dict:
     ],
     max_tokens=max_words * 2,
     temperature=0,
+    logits_processor=LogitsProcessorList([enforce_deadline]),
   )
+  if timed_out:
+    raise TimeoutError(f"wall-clock timeout after {time.time() - start:.0f}s")
   content = output["choices"][0]["message"]["content"]
   summary = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
   usage = output["usage"]

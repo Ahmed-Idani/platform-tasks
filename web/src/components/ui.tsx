@@ -1,7 +1,7 @@
 import clsx from "clsx";
-import { Ban, Check, CircleCheck, CircleDashed, CircleX, Clock3, Copy, LoaderCircle } from "lucide-react";
+import { Ban, Check, CircleCheck, CircleDashed, CircleX, Clock3, Copy, LoaderCircle, RotateCw } from "lucide-react";
 import { type ButtonHTMLAttributes, type ReactNode, forwardRef, useState } from "react";
-import type { Status } from "../lib/api";
+import type { DisplayStatus } from "../lib/api";
 
 // ---- Button ----------------------------------------------------------------------
 
@@ -36,21 +36,22 @@ export const Button = forwardRef<
 
 // ---- Status ----------------------------------------------------------------------
 
-export const statusMeta: Record<Status, { label: string; tone: string; soft: string; Icon: typeof Check }> = {
+export const statusMeta: Record<DisplayStatus, { label: string; tone: string; soft: string; Icon: typeof Check }> = {
   pending: { label: "Pending", tone: "text-gray", soft: "bg-gray-soft", Icon: CircleDashed },
   queued: { label: "Queued", tone: "text-amber", soft: "bg-amber-soft", Icon: Clock3 },
+  retrying: { label: "Retrying", tone: "text-amber", soft: "bg-amber-soft", Icon: RotateCw },
   running: { label: "Running", tone: "text-blue", soft: "bg-blue-soft", Icon: LoaderCircle },
   completed: { label: "Completed", tone: "text-green", soft: "bg-green-soft", Icon: CircleCheck },
   failed: { label: "Failed", tone: "text-red", soft: "bg-red-soft", Icon: CircleX },
   cancelled: { label: "Cancelled", tone: "text-gray", soft: "bg-gray-soft", Icon: Ban },
 };
 
-export function StatusIcon({ status, className }: { status: Status; className?: string }) {
+export function StatusIcon({ status, className }: { status: DisplayStatus; className?: string }) {
   const { tone, Icon } = statusMeta[status];
   return <Icon className={clsx("shrink-0", tone, status === "running" && "animate-spin", className ?? "size-3.5")} />;
 }
 
-export function StatusBadge({ status, pill }: { status: Status; pill?: boolean }) {
+export function StatusBadge({ status, pill }: { status: DisplayStatus; pill?: boolean }) {
   const { label, tone, soft } = statusMeta[status];
   return (
     <span

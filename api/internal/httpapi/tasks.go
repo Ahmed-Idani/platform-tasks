@@ -103,23 +103,52 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
+	task = s.enqueue(r.Context(), task)
+	slog.Info("task created", "task_id", task.ID, "status", task.Status)
+	writeJSON(w, http.StatusAccepted, task)
+}
 
+// enqueue publishes a 'pending' task and marks it 'queued'. It never fails the
+// request: if the publish fails, the task stays pending and the sweeper retries it.
+func (s *Server) enqueue(ctx context.Context, task store.Task) store.Task {
 	// Own timeout: don't let a slow broker hang the request forever.
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := s.pub.Publish(ctx, task.TaskType, task.ID); err != nil {
+	if err := s.pub.Publish(pubCtx, task.TaskType, task.ID); err != nil {
 		slog.Warn("publish failed, sweeper will retry", "task_id", task.ID, "err", err)
-	} else if queuedAt, err := s.store.MarkQueued(r.Context(), task.ID); err != nil {
+	} else if queuedAt, err := s.store.MarkQueued(ctx, task.ID); err != nil {
 		slog.Warn("mark queued failed", "task_id", task.ID, "err", err)
 	} else if queuedAt != nil {
 		task.Status, task.QueuedAt = "queued", queuedAt
-	} else if fresh, err := s.store.Get(r.Context(), task.ID); err == nil {
+	} else if fresh, err := s.store.Get(ctx, task.ID); err == nil {
 		// Not 'pending' anymore: a worker claimed it before we could mark it queued.
 		task = fresh
 		task.Parameters = nil
 	}
+	return task
+}
 
-	slog.Info("task created", "task_id", task.ID, "status", task.Status)
+// POST /v1/tasks/{id}/retry: start a failed task over from attempt 0.
+func (s *Server) retryTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isUUID(id) {
+		writeError(w, http.StatusBadRequest, "task id must be a UUID")
+		return
+	}
+	task, err := s.store.ResetForRetry(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	case errors.Is(err, store.ErrNotRetryable):
+		writeError(w, http.StatusConflict, "only failed or cancelled tasks can be retried")
+		return
+	case err != nil:
+		internalError(w, r, err)
+		return
+	}
+	task = s.enqueue(r.Context(), task)
+	slog.Info("task retried by hand", "task_id", task.ID, "status", task.Status)
 	writeJSON(w, http.StatusAccepted, task)
 }
 
@@ -205,5 +234,10 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	for _, n := range counts {
 		total += n
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"counts": counts, "total": total})
+	// Queue depths come from RabbitMQ; if it's down, still answer with the counts.
+	queues, err := s.pub.Depths("llm_inference")
+	if err != nil {
+		slog.Warn("stats: queue depths unavailable", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"counts": counts, "total": total, "queues": queues})
 }

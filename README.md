@@ -76,7 +76,7 @@ stateDiagram-v2
 | `worker/models/` | GGUF model files (gitignored, copied into the image) |
 | `web/` | React dashboard (Vite + TypeScript + Tailwind) |
 | `infra/` | Config for third-party services (`rabbitmq.conf`, …) |
-| `scripts/` | Dev helpers (`publish.py` pushes test messages straight to RabbitMQ) |
+| `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (prints callbacks) |
 | `testdata/` | Sample inputs |
 | `docs/plan/` | Project context, build plan, TODO / decision log |
 | `docs/guides/` | Step-by-step guides |

@@ -13,12 +13,14 @@ import db
 import webhook
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://app:app@localhost:5672/%2F")
-QUEUE = "tasks.llm_inference"
+TASK_TYPE = "llm_inference"
+QUEUE = f"tasks.{TASK_TYPE}"          # topology comes from infra/rabbitmq/definitions.json
+DEAD_EXCHANGE = "tasks.dlx"           # -> tasks.llm_inference.dlq
 WORKER_ID = os.getenv("WORKER_ID", socket.gethostname())
-MAX_CHARS = 24_000        # ≈ 6,000 tokens; same limit as the API
-MAX_ATTEMPTS = 3          # a task that keeps killing workers (OOM...) must stop somewhere
-HEARTBEAT_EVERY_S = 5     # must be well under db.STALE_AFTER_S
-REQUEUE_DELAY_S = 10      # before handing back a message we can't process yet
+MAX_CHARS = 24_000                    # ≈ 6,000 tokens; same limit as the API
+MAX_ATTEMPTS = 3                      # then the task is failed and its message dead-lettered
+TASK_TIMEOUT_S = int(os.getenv("TASK_TIMEOUT_S", "540"))  # < stop_grace_period (600s)
+HEARTBEAT_EVERY_S = 5                 # must be well under db.STALE_AFTER_S
 
 
 class PermanentError(Exception):
@@ -44,7 +46,7 @@ def process(params):
     raise PermanentError("text is empty")
   if len(text) > MAX_CHARS:
     raise PermanentError(f"text too long: {len(text)} chars, max {MAX_CHARS}")
-  out = summarize(text, params.get("max_words", 150))
+  out = summarize(text, params.get("max_words", 150), deadline=time.time() + TASK_TIMEOUT_S)
   return {
     "model": MODEL_NAME,
     "summary": out["summary"],
@@ -57,19 +59,32 @@ def process(params):
 
 # --- channel operations: only ever run on the connection's thread -----------------
 
-def ack(channel, delivery_tag):
+def ack(channel, delivery_tag, body, error):
   if channel.is_open:
     channel.basic_ack(delivery_tag)
 
 
-def reject(channel, delivery_tag):
+def retry(channel, delivery_tag, body, error):
+  """nack without requeue: the main queue dead-letters it to tasks.retry, where it
+  waits out the TTL (30s) and is dead-lettered back to the main queue."""
   if channel.is_open:
-    channel.basic_reject(delivery_tag, requeue=False)
+    channel.basic_nack(delivery_tag, requeue=False)
 
 
-def requeue(channel, delivery_tag):
+def dead(channel, delivery_tag, body, error):
+  """Keep a copy in the DLQ for inspection, then ack the original."""
   if channel.is_open:
-    channel.basic_nack(delivery_tag, requeue=True)
+    channel.basic_publish(
+      exchange=DEAD_EXCHANGE,
+      routing_key=TASK_TYPE,
+      body=body,
+      properties=pika.BasicProperties(
+        delivery_mode=pika.DeliveryMode.Persistent,
+        content_type="application/json",
+        headers={"x-error": (error or "")[:500], "x-worker": WORKER_ID},
+      ),
+    )
+    channel.basic_ack(delivery_tag)
 
 
 # --- one task ---------------------------------------------------------------------
@@ -86,12 +101,25 @@ def deliver_webhook(task_id, row):
   if not row["callback_url"]:
     return
   error = webhook.send(row["callback_url"], webhook.payload(task_id, row))
-  db.record_webhook(task_id, error)
+  try:
+    db.persistent(db.record_webhook, task_id, error)
+  except Exception as e:
+    log(f"webhook {task_id}: could not record delivery: {e!r}")
   log(f"webhook {task_id}: {'sent' if error is None else 'FAILED ' + error}")
 
 
+def fail(task_id, error):
+  """Terminal failure: mark failed, notify, dead-letter the message."""
+  row = db.persistent(db.finish, task_id, WORKER_ID, "failed", error=error)
+  if row is None:
+    log(f"{task_id}: lost ownership, not failing it")
+    return "ack", None
+  deliver_webhook(task_id, row)
+  return "dead", error
+
+
 def run_task(task_id):
-  """Returns what to do with the message: 'ack' or 'requeue'."""
+  """Returns (outcome, error): outcome is 'ack', 'retry' or 'dead'."""
   task = db.claim(task_id, WORKER_ID)
 
   if task is None:
@@ -99,85 +127,99 @@ def run_task(task_id):
     row = db.get(task_id)
     if row is None:
       log(f"{task_id}: unknown task, dropping message")
-      return "ack"
+      return "ack", None
     if row["status"] == "running" and row["alive"]:
-      # A redelivery while the previous owner is still heartbeating (e.g. its RabbitMQ
-      # connection dropped but the process lives). Hand the message back and look again
-      # later: either that worker finishes, or its heartbeat goes stale and we take over.
-      log(f"{task_id}: still running elsewhere, requeue in {REQUEUE_DELAY_S}s")
-      time.sleep(REQUEUE_DELAY_S)
-      return "requeue"
+      # A redelivery while the previous owner is still heartbeating (its RabbitMQ
+      # connection dropped but the process lives). Look again after the retry delay:
+      # by then that worker has finished, or its heartbeat is stale and we take over.
+      log(f"{task_id}: still running elsewhere, checking again after the retry delay")
+      return "retry", None
     if row["status"] in ("completed", "failed") and row["callback_url"] and row["webhook_sent_at"] is None:
       # Previous worker finished the task but died before the webhook: send it now.
       log(f"{task_id}: already {row['status']}, sending the missing webhook")
       deliver_webhook(task_id, row)
-      return "ack"
+      return "ack", None
     log(f"{task_id}: already {row['status']}, dropping duplicate message")
-    return "ack"
+    return "ack", None
 
-  if task["attempt"] > MAX_ATTEMPTS:
-    row = db.finish(task_id, WORKER_ID, "failed", error=f"gave up after {MAX_ATTEMPTS} attempts")
-    log(f"failed {task_id}: attempt {task['attempt']} > {MAX_ATTEMPTS}")
-    if row:
-      deliver_webhook(task_id, row)
-    return "ack"
+  attempt = task["attempt"]
+  if attempt > MAX_ATTEMPTS:
+    # Only reachable when attempts crashed the worker itself (OOM, kill -9) or its
+    # heartbeat was reaped: a handled error never claims beyond MAX_ATTEMPTS.
+    log(f"failed {task_id}: attempt {attempt} > {MAX_ATTEMPTS}")
+    return fail(task_id, f"gave up after {MAX_ATTEMPTS} attempts; last: {task.get('error') or 'worker lost'}")
 
-  log(f"start {task_id} (attempt {task['attempt']})")
+  log(f"start {task_id} (attempt {attempt}/{MAX_ATTEMPTS})")
   stop = threading.Event()
   beat = threading.Thread(target=heartbeat_loop, args=(task_id, stop), daemon=True)
   beat.start()
   try:
     result = process(task["parameters"])
-    row = db.finish(task_id, WORKER_ID, "completed", result=result)
-    log(f"done {task_id} in {result['seconds']}s")
   except PermanentError as e:
-    row = db.finish(task_id, WORKER_ID, "failed", error=str(e))
-    log(f"failed {task_id}: {e}")
+    log(f"failed {task_id}: {e} (permanent, no retry)")
+    return fail(task_id, str(e))
   except Exception as e:
-    # Unclassified = transient. No retry topology yet (Stage 4), so for now it is
-    # recorded as failed instead of looping forever.
-    row = db.finish(task_id, WORKER_ID, "failed", error=f"unexpected: {e!r}")
-    log(f"crashed on {task_id}: {e!r}")
+    # Transient, including anything unclassified (TimeoutError, OOM, bugs...).
+    error = f"attempt {attempt}: {type(e).__name__}: {e}"
+    if attempt >= MAX_ATTEMPTS:
+      log(f"failed {task_id}: {error} (no attempts left)")
+      return fail(task_id, error)
+    log(f"retry {task_id}: {error} (next attempt in ~30s)")
+    if not db.persistent(db.requeue_for_retry, task_id, WORKER_ID, error):
+      log(f"{task_id}: lost ownership, dropping")
+      return "ack", None
+    return "retry", error
   finally:
     stop.set()
     beat.join()
 
+  # Rides out a Postgres outage: the summary cost minutes of CPU, don't throw it away.
+  row = db.persistent(db.finish, task_id, WORKER_ID, "completed", result=result)
   if row is None:
     log(f"{task_id}: lost ownership while running (heartbeat went stale), result discarded")
-    return "ack"
+    return "ack", None
+  log(f"done {task_id} in {result['seconds']}s")
   deliver_webhook(task_id, row)
-  return "ack"
+  return "ack", None
 
 
 def handle(connection, channel, delivery_tag, body):
   """Runs in a worker thread. Never touches the channel directly."""
-  def then(fn):
-    connection.add_callback_threadsafe(functools.partial(fn, channel, delivery_tag))
+  def then(fn, error=None):
+    try:
+      connection.add_callback_threadsafe(functools.partial(fn, channel, delivery_tag, body, error))
+    except pika.exceptions.AMQPError:
+      # Connection died while we worked. RabbitMQ will redeliver; Postgres already has
+      # the outcome, so the redelivery is recognized as a duplicate.
+      log(f"connection gone, could not {fn.__name__} the message; it will be redelivered")
 
   try:
     task_id = uuid.UUID(json.loads(body)["task_id"])
   except (ValueError, KeyError, TypeError):
-    log(f"malformed message, dropping it: {body[:200]!r}")
-    return then(reject)
+    log(f"malformed message, dead-lettering it: {body[:200]!r}")
+    return then(dead, "malformed message")
 
   try:
-    outcome = run_task(task_id)
+    outcome, error = run_task(task_id)
   except Exception as e:
-    # Postgres unreachable at claim/finish time: don't lose the message, retry later.
-    log(f"{task_id}: infrastructure error {e!r}, requeue in {REQUEUE_DELAY_S}s")
-    time.sleep(REQUEUE_DELAY_S)
-    outcome = "requeue"
+    # Postgres unreachable at claim time (or for longer than db.PERSIST_FOR_S):
+    # don't lose the message, try again after the retry delay.
+    log(f"{task_id}: infrastructure error {e!r}, retry in ~30s")
+    outcome, error = "retry", repr(e)
 
-  # Everything durable is in Postgres now; only THEN ack.
-  then(ack if outcome == "ack" else requeue)
+  # Everything durable is in Postgres now; only THEN settle the message.
+  then({"ack": ack, "retry": retry, "dead": dead}[outcome], error)
 
 
-def main():
-  db.open_pool()
-
+def consume(stopping, current):
+  """One connection's lifetime: consume until asked to stop or the connection drops.
+  Always waits for the in-flight task before returning, so a reconnect never runs two
+  generations at once."""
   connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
   channel = connection.channel()
-  channel.queue_declare(queue=QUEUE, durable=True)
+  # passive: only check it exists. The topology is infrastructure (definitions.json);
+  # a missing queue means a misconfigured broker, and we'd rather fail loudly.
+  channel.queue_declare(queue=QUEUE, passive=True)
   channel.basic_qos(prefetch_count=1)  # one task at a time
 
   threads = []
@@ -186,24 +228,50 @@ def main():
     threads[:] = [t for t in threads if t.is_alive()]  # forget finished threads
     t = threading.Thread(target=handle, args=(connection, ch, method.delivery_tag, body))
     t.start()
-    threads.append(t)  # kept so shutdown can join() the task still running
+    threads.append(t)  # kept so we can join() the task still running
 
   channel.basic_consume(queue=QUEUE, on_message_callback=on_message, auto_ack=False)
+  current["channel"] = channel
+  if stopping.is_set():  # signal arrived while we were connecting
+    return
+  log(f"waiting for tasks on '{QUEUE}'")
+  try:
+    channel.start_consuming()
+  finally:
+    current["channel"] = None
+    for t in threads:  # the in-flight task always finishes (its result lands in Postgres)
+      t.join()
+    if connection.is_open:
+      connection.process_data_events(time_limit=1)  # let its ack go out
+      connection.close()
+
+
+def main():
+  db.open_pool()
+  stopping = threading.Event()
+  current = {"channel": None}
 
   def shutdown(signum, frame):
     log("SIGTERM/SIGINT received: stop taking new tasks, finishing the current one")
-    channel.stop_consuming()
+    stopping.set()
+    if current["channel"] is not None:
+      current["channel"].stop_consuming()
   signal.signal(signal.SIGTERM, shutdown)
   signal.signal(signal.SIGINT, shutdown)
 
-  log(f"waiting for tasks on '{QUEUE}'")
-  channel.start_consuming()
+  backoff = 1
+  while not stopping.is_set():
+    try:
+      consume(stopping, current)
+      backoff = 1
+    except pika.exceptions.AMQPError as e:
+      # Broker restarted, network blip... The unacked message (if any) is redelivered
+      # by RabbitMQ; its task was already finished in Postgres, so the redelivery is
+      # dropped as a duplicate.
+      log(f"RabbitMQ connection lost ({type(e).__name__}), reconnecting in {backoff}s")
+      stopping.wait(backoff)
+      backoff = min(backoff * 2, 30)
 
-  # stop_consuming returned: wait for the in-flight task, then let its ack go out
-  for t in threads:
-    t.join()
-  connection.process_data_events(time_limit=1)
-  connection.close()
   db.pool.close()
   log("bye")
 

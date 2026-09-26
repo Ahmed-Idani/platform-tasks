@@ -11,6 +11,7 @@ services:
       RABBITMQ_DEFAULT_PASS: app
     volumes:
       - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-platform.conf:ro
+      - ./infra/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
       - rabbitmq-data:/var/lib/rabbitmq   # queues survive container restarts
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
@@ -38,6 +39,7 @@ services:
   worker:
     image: summarizer-worker:dev
     build: ./worker
+    restart: unless-stopped   # last resort if the process itself dies (OOM, bug)
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -47,6 +49,7 @@ services:
       RABBITMQ_URL: amqp://app:app@rabbitmq:5672/%2F   # "rabbitmq" = the service name, not localhost
       DATABASE_URL: postgresql://app:app@postgres:5432/tasks   # container port, not the 5433 host mapping
       N_THREADS: "1"
+      TASK_TIMEOUT_S: ${TASK_TIMEOUT_S:-540}   # per-task wall clock; < stop_grace_period
     extra_hosts:
       - "host.docker.internal:host-gateway"   # lets callback_url reach a server running on your machine
     stop_grace_period: 600s   # longer than the longest task, so SIGTERM can finish it

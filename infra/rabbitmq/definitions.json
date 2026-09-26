@@ -1,0 +1,39 @@
+{
+  "users": [
+    {
+      "name": "app",
+      "password_hash": "4xbqcMx2SdW3laWw183eaMYN6YAirSYEutb8tZRCKcg0UhFW",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": ["administrator"]
+    }
+  ],
+  "vhosts": [{ "name": "/" }],
+  "permissions": [{ "user": "app", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }],
+
+  "exchanges": [
+    { "name": "tasks",       "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "tasks.retry", "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "tasks.dlx",   "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
+  ],
+
+  "queues": [
+    {
+      "name": "tasks.llm_inference", "vhost": "/", "durable": true, "auto_delete": false,
+      "arguments": { "x-queue-type": "classic", "x-dead-letter-exchange": "tasks.retry" }
+    },
+    {
+      "name": "tasks.llm_inference.retry", "vhost": "/", "durable": true, "auto_delete": false,
+      "arguments": { "x-queue-type": "classic", "x-message-ttl": 30000, "x-dead-letter-exchange": "tasks" }
+    },
+    {
+      "name": "tasks.llm_inference.dlq", "vhost": "/", "durable": true, "auto_delete": false,
+      "arguments": { "x-queue-type": "classic" }
+    }
+  ],
+
+  "bindings": [
+    { "source": "tasks",       "vhost": "/", "destination": "tasks.llm_inference",       "destination_type": "queue", "routing_key": "llm_inference", "arguments": {} },
+    { "source": "tasks.retry", "vhost": "/", "destination": "tasks.llm_inference.retry", "destination_type": "queue", "routing_key": "llm_inference", "arguments": {} },
+    { "source": "tasks.dlx",   "vhost": "/", "destination": "tasks.llm_inference.dlq",   "destination_type": "queue", "routing_key": "llm_inference", "arguments": {} }
+  ]
+}

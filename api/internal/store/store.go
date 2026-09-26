@@ -147,18 +147,68 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Task, error) {
 	return tasks, rows.Err()
 }
 
+// Ref identifies a task to (re)publish.
+type Ref struct {
+	ID       string
+	TaskType string
+}
+
 // StalePending returns tasks stuck in 'pending': inserted, but the publish never
 // happened (API crashed or RabbitMQ was down in between).
-func (s *Store) StalePending(ctx context.Context, olderThan time.Duration, limit int) ([]string, error) {
+func (s *Store) StalePending(ctx context.Context, olderThan time.Duration, limit int) ([]Ref, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text FROM tasks
+		`SELECT id::text, task_type FROM tasks
 		  WHERE status = 'pending' AND created_at < now() - make_interval(secs => $1)
 		  ORDER BY created_at
 		  LIMIT $2`, olderThan.Seconds(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("stale pending: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Ref])
+}
+
+// ReapStale puts back in 'pending' the tasks whose worker vanished: 'running' with a
+// heartbeat older than staleAfter, and no redelivery to rescue them (e.g. the worker
+// hung with its connection still open). 'pending', not 'queued': the caller then
+// publishes like a new task, and if that publish fails the pending sweep retries it.
+// The worker's claim counts the attempt and fails the task once attempts run out.
+func (s *Store) ReapStale(ctx context.Context, staleAfter time.Duration) ([]Ref, error) {
+	rows, err := s.pool.Query(ctx,
+		`UPDATE tasks
+		    SET status = 'pending', queued_at = NULL, heartbeat_at = NULL,
+		        error = format('worker %s lost: no heartbeat for %ss (attempt %s)', worker_id, $1::int, attempt)
+		  WHERE status = 'running' AND heartbeat_at < now() - make_interval(secs => $1)
+		  RETURNING id::text, task_type`, int(staleAfter.Seconds()))
+	if err != nil {
+		return nil, fmt.Errorf("reap stale: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Ref])
+}
+
+// ErrNotRetryable: only failed or cancelled tasks can be retried by hand.
+var ErrNotRetryable = errors.New("task is not failed or cancelled")
+
+// ResetForRetry starts a failed task over: back to 'pending' with a clean slate.
+// Conditional, so retrying a task that is already running is refused.
+func (s *Store) ResetForRetry(ctx context.Context, id string) (Task, error) {
+	var t Task
+	row := s.pool.QueryRow(ctx,
+		`UPDATE tasks
+		    SET status = 'pending', attempt = 0, error = NULL, result = NULL, worker_id = NULL,
+		        heartbeat_at = NULL, queued_at = NULL, started_at = NULL, completed_at = NULL,
+		        webhook_sent_at = NULL, webhook_error = NULL
+		  WHERE id = $1 AND status IN ('failed', 'cancelled')
+		  RETURNING `+columns, id)
+	if err := scan(row, &t); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, getErr := s.Get(ctx, id); errors.Is(getErr, ErrNotFound) {
+				return Task{}, ErrNotFound
+			}
+			return Task{}, ErrNotRetryable
+		}
+		return Task{}, fmt.Errorf("reset for retry: %w", err)
+	}
+	return t, nil
 }
 
 // CountByStatus returns how many tasks are in each status (0 for empty ones).

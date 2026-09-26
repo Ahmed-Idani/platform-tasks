@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ChevronDown, CircleAlert, FileText, Webhook, X } from "lucide-react";
+import { ChevronDown, CircleAlert, FileText, RotateCw, Webhook, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { ApiError, type Task, api, isActive } from "../lib/api";
+import { toast } from "sonner";
+import { ApiError, MAX_ATTEMPTS, RETRY_DELAY_S, type Task, api, displayStatus, isActive } from "../lib/api";
 import { between, duration, num, timestamp, useNow } from "../lib/format";
 import { Button, CopyButton, Kbd, Skeleton, Spinner, StatusBadge } from "./ui";
 
@@ -50,21 +51,26 @@ function steps(task: Task, now: number): Step[] {
       label: "Queued",
       at: task.queued_at,
       state: s !== "pending" ? "done" : "current",
-      detail: s !== "pending" ? "Published to RabbitMQ" : "Waiting for publish (sweeper retries every 30s)",
+      detail:
+        displayStatus(task) === "retrying"
+          ? `Back in the queue after attempt ${task.attempt} failed (retry delay ${RETRY_DELAY_S}s)`
+          : s !== "pending"
+            ? "Published to RabbitMQ"
+            : "Waiting for publish (sweeper retries every 30s)",
       gap: between(task.created_at, task.queued_at),
     },
     {
       label: "Running",
       at: task.started_at,
-      state: task.started_at ? "done" : s === "queued" ? "current" : "todo",
+      state: task.started_at && s !== "queued" ? "done" : s === "queued" ? "current" : "todo",
       detail: task.started_at ? (
         <>
-          Claimed by <span className="font-mono text-fg">{task.worker_id}</span> · attempt #{task.attempt}
+          Claimed by <span className="font-mono text-fg">{task.worker_id}</span> · attempt {task.attempt} of {MAX_ATTEMPTS}
         </>
       ) : (
         "Waiting for a free worker"
       ),
-      gap: between(task.queued_at, task.started_at, s === "queued" ? now : undefined),
+      gap: between(task.queued_at, s === "queued" ? null : task.started_at, s === "queued" ? now : undefined),
     },
     {
       label: s === "failed" ? "Failed" : "Completed",
@@ -208,11 +214,31 @@ function Body({ task, now }: { task: Task; now: number }) {
         <Timeline task={task} now={now} />
       </Section>
 
-      {task.status === "failed" && task.error && (
+      {task.error && task.status === "failed" && (
         <Section title="Error">
           <div className="flex gap-2.5 rounded-md border border-red/25 bg-red-soft px-3.5 py-3 text-[13px] text-red">
             <CircleAlert className="mt-px size-4 shrink-0" />
-            <span className="font-mono break-words">{task.error}</span>
+            <div className="min-w-0">
+              <span className="font-mono break-words">{task.error}</span>
+              <p className="mt-1.5 font-sans text-xs opacity-80">
+                The message was dead-lettered to <span className="font-mono">tasks.llm_inference.dlq</span>.
+              </p>
+            </div>
+          </div>
+        </Section>
+      )}
+      {task.error && (task.status === "queued" || task.status === "running") && (
+        <Section title={task.status === "running" ? "Previous attempt" : "Retrying"}>
+          <div className="flex gap-2.5 rounded-md border border-amber/25 bg-amber-soft px-3.5 py-3 text-[13px] text-amber">
+            <RotateCw className="mt-px size-4 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-mono break-words">{task.error}</span>
+              <p className="mt-1.5 font-sans text-xs opacity-80">
+                {task.status === "running"
+                  ? `Now on attempt ${task.attempt} of ${MAX_ATTEMPTS}.`
+                  : `Waiting ${RETRY_DELAY_S}s in tasks.llm_inference.retry, then attempt ${task.attempt + 1} of ${MAX_ATTEMPTS}.`}
+              </p>
+            </div>
           </div>
         </Section>
       )}
@@ -255,8 +281,12 @@ function Body({ task, now }: { task: Task; now: number }) {
           <Metric label="Output tokens" value={num(r?.output_tokens)} />
           <Metric label="Tokens / sec" value={r?.tokens_per_second?.toFixed(2) ?? "–"} hint="output tokens ÷ inference time" />
           <Metric label="Inference" value={r ? duration(r.seconds * 1000) : "–"} hint="time inside the model" />
-          <Metric label="Queue wait" value={duration(between(task.queued_at, task.started_at, task.status === "queued" ? now : undefined))} hint="queued → running" />
-          <Metric label="Attempt" value={task.attempt ? `#${task.attempt}` : "–"} />
+          <Metric
+            label="Queue wait"
+            value={duration(between(task.queued_at, task.status === "queued" ? null : task.started_at, task.status === "queued" ? now : undefined))}
+            hint="queued → running"
+          />
+          <Metric label="Attempt" value={task.attempt ? `${task.attempt} of ${MAX_ATTEMPTS}` : "–"} />
           <Metric label="Model" value={r?.model ?? "–"} />
           <Metric label="Worker" value={task.worker_id ?? "–"} />
           <Metric label="Max words" value={maxWords ?? "–"} />
@@ -342,6 +372,17 @@ export function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) 
   });
   const task = query.data;
   const now = useNow(250, !!task && isActive(task.status));
+  const qc = useQueryClient();
+  const retry = useMutation({
+    mutationFn: () => api.retry(id),
+    onSuccess: (t) => {
+      qc.setQueryData(["task", id], t);
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      toast.success("Task restarted", { description: "Back to attempt 1, published to RabbitMQ." });
+    },
+    onError: (e) => toast.error("Couldn't retry", { description: e.message }),
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -358,7 +399,7 @@ export function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) 
         className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[600px] animate-slide-in flex-col border-l border-border bg-surface shadow-2xl"
       >
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
-          {task ? <StatusBadge status={task.status} pill /> : <Skeleton className="h-6 w-24 rounded-full" />}
+          {task ? <StatusBadge status={displayStatus(task)} pill /> : <Skeleton className="h-6 w-24 rounded-full" />}
           <div className="flex min-w-0 items-center gap-1">
             <FileText className="size-4 shrink-0 text-faint" />
             <span className="truncate font-mono text-[13px]" title={id}>
@@ -368,6 +409,12 @@ export function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) 
           </div>
           <div className="ml-auto flex items-center gap-2">
             {query.isFetching && task && <Spinner className="size-3.5" />}
+            {task && (task.status === "failed" || task.status === "cancelled") && (
+              <Button size="sm" onClick={() => retry.mutate()} loading={retry.isPending}>
+                {!retry.isPending && <RotateCw className="size-3.5" />}
+                Retry
+              </Button>
+            )}
             <Kbd>Esc</Kbd>
             <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close" className="px-1.5">
               <X className="size-4" />

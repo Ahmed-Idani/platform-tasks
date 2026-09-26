@@ -1,6 +1,8 @@
 """Every query the worker runs against the tasks table."""
 import os
+import time
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -12,7 +14,32 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://app:app@localhost:5433/ta
 STALE_AFTER_S = 15
 
 # 2 connections: one for the task itself, one for the heartbeat thread.
-pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=2, open=False, kwargs={"row_factory": dict_row})
+pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=2, open=False, timeout=5,
+                      kwargs={"row_factory": dict_row})
+
+# How long to keep retrying a write that must not be lost (a finished result) while
+# Postgres is unreachable. Longer than a restart or a failover; shorter than the
+# reaper's staleness threshold would matter, since the heartbeat resumes with Postgres.
+PERSIST_FOR_S = 120
+
+
+def persistent(fn, *args, **kwargs):
+  """Run a DB call, retrying through a Postgres outage for up to PERSIST_FOR_S.
+
+  Used for writes whose loss would throw away real work (the generated summary).
+  Raises the last error if Postgres doesn't come back in time.
+  """
+  give_up = time.time() + PERSIST_FOR_S
+  wait = 1
+  while True:
+    try:
+      return fn(*args, **kwargs)
+    except (psycopg.OperationalError, psycopg.errors.AdminShutdown, TimeoutError) as e:
+      if time.time() + wait > give_up:
+        raise
+      print(f"postgres unavailable ({type(e).__name__}), retrying in {wait}s", flush=True)
+      time.sleep(wait)
+      wait = min(wait * 2, 10)
 
 
 def open_pool():
@@ -30,13 +57,13 @@ def claim(task_id, worker_id):
       """
       UPDATE tasks
          SET status = 'running', worker_id = %(worker)s, attempt = attempt + 1,
-             started_at = now(), heartbeat_at = now(), error = NULL,
+             started_at = now(), heartbeat_at = now(),   -- error kept: "attempt 1 failed: ..." stays visible
              -- the worker can win the race against the API's 'mark queued'
              queued_at = COALESCE(queued_at, now())
        WHERE id = %(id)s
          AND (status IN ('pending', 'queued')
               OR (status = 'running' AND heartbeat_at < now() - make_interval(secs => %(stale)s)))
-      RETURNING task_type, parameters, callback_url, attempt
+      RETURNING task_type, parameters, callback_url, attempt, error
       """,
       {"id": task_id, "worker": worker_id, "stale": STALE_AFTER_S},
     ).fetchone()
@@ -78,6 +105,21 @@ def finish(task_id, worker_id, status, result=None, error=None):
       {"id": task_id, "worker": worker_id, "status": status,
        "result": Jsonb(result) if result is not None else None, "error": error},
     ).fetchone()
+
+
+def requeue_for_retry(task_id, worker_id, error):
+  """running -> queued after a transient failure. The message then waits in the
+  retry queue (TTL) before coming back. Returns False if we no longer own the task."""
+  with pool.connection() as conn:
+    return conn.execute(
+      """
+      UPDATE tasks
+         SET status = 'queued', queued_at = now(), heartbeat_at = NULL, error = %(error)s
+       WHERE id = %(id)s AND worker_id = %(worker)s AND status = 'running'
+      RETURNING id
+      """,
+      {"id": task_id, "worker": worker_id, "error": error},
+    ).fetchone() is not None
 
 
 def record_webhook(task_id, error=None):

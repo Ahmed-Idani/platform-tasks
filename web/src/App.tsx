@@ -57,7 +57,7 @@ export default function App() {
   const closeDialog = useCallback(() => setCreating(false), []);
 
   const running = stats.data?.counts.running ?? 0;
-  const queued = (stats.data?.counts.queued ?? 0) + (stats.data?.counts.pending ?? 0);
+  const queues = stats.data?.queues;
 
   return (
     <div className="min-h-screen">
@@ -78,9 +78,34 @@ export default function App() {
                   <span className="text-blue">{running}</span> running
                 </span>
                 <span className="h-3.5 w-px bg-border-strong" />
-                <span className="tabular">
-                  <span className={queued ? "text-amber" : undefined}>{queued}</span> waiting
-                </span>
+                {queues ? (
+                  <>
+                    <span className="tabular" title="tasks.llm_inference: messages waiting for a worker">
+                      <span className={queues.main.ready ? "text-amber" : undefined}>{queues.main.ready}</span> in queue
+                    </span>
+                    <span className="h-3.5 w-px bg-border-strong" />
+                    <span className="tabular" title="tasks.llm_inference.retry: waiting out the 30s retry delay">
+                      <span className={queues.retry.ready ? "text-amber" : undefined}>{queues.retry.ready}</span> retrying
+                    </span>
+                    <span className="h-3.5 w-px bg-border-strong" />
+                    <span
+                      className={
+                        queues.dlq.ready
+                          ? "tabular rounded-full bg-red-soft px-2 py-0.5 font-medium text-red"
+                          : "tabular"
+                      }
+                      title="tasks.llm_inference.dlq: messages that failed for good"
+                    >
+                      {queues.dlq.ready} dead-lettered
+                    </span>
+                    <span className="h-3.5 w-px bg-border-strong" />
+                    <span className="tabular" title="consumers attached to tasks.llm_inference">
+                      {queues.main.consumers} worker{queues.main.consumers === 1 ? "" : "s"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-red">RabbitMQ unreachable</span>
+                )}
                 <span className="h-3.5 w-px bg-border-strong" />
               </>
             )}

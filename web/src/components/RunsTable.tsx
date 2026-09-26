@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { ArrowRight, CircleAlert, Clock3, Inbox, RefreshCw, Webhook } from "lucide-react";
 import type { ReactNode } from "react";
-import { type Status, type Task, isActive } from "../lib/api";
+import { MAX_ATTEMPTS, type Status, type Task, displayStatus, isActive } from "../lib/api";
 import { between, duration, num, relative, shortId, timestamp, useNow } from "../lib/format";
 import { Button, CopyButton, Skeleton, StatusBadge, statusMeta } from "./ui";
 
@@ -40,7 +40,9 @@ function WebhookCell({ task }: { task: Task }) {
 
 function Row({ task, now, selected, onSelect }: { task: Task; now: number; selected: boolean; onSelect: () => void }) {
   const live = isActive(task.status);
-  const wait = between(task.queued_at, task.started_at, task.status === "queued" ? now : undefined);
+  // While queued (incl. retrying), started_at may belong to a previous attempt: measure to now.
+  const queued = task.status === "queued";
+  const wait = between(task.queued_at, queued ? null : task.started_at, queued ? now : undefined);
   const run = between(task.started_at, task.completed_at, task.status === "running" ? now : undefined);
 
   return (
@@ -54,7 +56,7 @@ function Row({ task, now, selected, onSelect }: { task: Task; now: number; selec
     >
       <td className="relative py-2.5 pr-3 pl-4">
         {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-fg" />}
-        <StatusBadge status={task.status} />
+        <StatusBadge status={displayStatus(task)} />
       </td>
       <td className="py-2.5 pr-3">
         <span className="flex items-center gap-1">
@@ -85,8 +87,11 @@ function Row({ task, now, selected, onSelect }: { task: Task; now: number; selec
         )}
       </td>
       <td className="tabular py-2.5 pr-3 text-right font-mono">
-        <span className={task.attempt > 1 ? "rounded bg-amber-soft px-1.5 py-0.5 text-amber" : "text-muted"}>
-          {task.attempt === 0 ? "–" : `#${task.attempt}`}
+        <span
+          title={task.attempt ? `attempt ${task.attempt} of ${MAX_ATTEMPTS}` : undefined}
+          className={task.attempt > 1 ? "rounded bg-amber-soft px-1.5 py-0.5 text-amber" : "text-muted"}
+        >
+          {task.attempt === 0 ? "–" : `${task.attempt}/${MAX_ATTEMPTS}`}
         </span>
       </td>
       <td className="max-w-[140px] truncate py-2.5 pr-3 font-mono text-muted" title={task.worker_id ?? undefined}>

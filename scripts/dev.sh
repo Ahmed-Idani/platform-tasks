@@ -33,10 +33,16 @@ bold=$'\e[1m'; dim=$'\e[2m'; reset=$'\e[0m'
 say() { echo "${bold}==>${reset} $*"; }
 
 # Prefix every line of a process's output with a colored tag: "api    | ...".
+# Every PID is recorded: the cleanup must not rely on Ctrl+C reaching the children,
+# because background jobs of a script start with SIGINT *ignored*.
+PIDS=()
 run() {
   local name=$1 color=$2; shift 2
   ( "$@" 2>&1 | sed -u "s/^/"$'\e['"${color}m$(printf '%-7s' "$name")|"$'\e[0m'" /" ) &
+  PIDS+=($!)
 }
+
+descendants() { local c; for c in $(pgrep -P "$1"); do descendants "$c"; echo "$c"; done; }
 
 need() { command -v "$1" >/dev/null || { echo "missing: $1"; exit 1; }; }
 need docker; need go; need npm
@@ -47,13 +53,23 @@ for p in 8080 5173 9000; do
 done
 
 cleanup() {
-  trap - INT TERM EXIT
-  trap '' INT   # a second Ctrl+C must not interrupt the shutdown half-way
+  trap - EXIT
+  trap '' INT TERM   # a second Ctrl+C must not interrupt the shutdown half-way
   echo
   say "stopping API, web, webhook receiver, local worker"
-  # Our background jobs (and their children: vite, wgo's API process, sed...).
-  for pid in $(jobs -p); do pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true; done
-  wait 2>/dev/null || true
+  local all=() pid
+  for pid in "${PIDS[@]}"; do all+=($(descendants "$pid") "$pid"); done
+  if ((${#all[@]})); then
+    kill -TERM "${all[@]}" 2>/dev/null || true
+    # A local worker finishes its current task first: give it a moment, then force.
+    for _ in $(seq 1 50); do
+      local alive=()
+      for pid in "${all[@]}"; do kill -0 "$pid" 2>/dev/null && alive+=("$pid"); done
+      ((${#alive[@]})) || break
+      sleep 0.3
+    done
+    for pid in "${all[@]}"; do kill -0 "$pid" 2>/dev/null && { echo "  force-killing $(ps -o comm= -p "$pid" 2>/dev/null || echo "$pid")"; kill -KILL "$pid" 2>/dev/null; }; done
+  fi
   if [[ "$KEEP_INFRA" == true ]]; then
     say "leaving Docker services running (--keep-infra)"
   else

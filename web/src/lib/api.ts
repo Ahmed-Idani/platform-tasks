@@ -33,9 +33,16 @@ export interface Task {
   webhook_error: string | null;
 }
 
+export interface QueueDepth {
+  ready: number;
+  consumers: number;
+}
+
 export interface Stats {
   counts: Record<Status, number>;
   total: number;
+  // null when RabbitMQ is unreachable
+  queues: { main: QueueDepth; retry: QueueDepth; dlq: QueueDepth } | null;
 }
 
 export interface CreateTaskInput {
@@ -47,6 +54,9 @@ export interface CreateTaskInput {
 // Must match MaxChars in api/internal/httpapi/tasks.go.
 export const MAX_CHARS = 24_000;
 export const MAX_WORDS = 1000;
+// Must match MAX_ATTEMPTS in worker/worker.py and the retry queue TTL in definitions.json.
+export const MAX_ATTEMPTS = 3;
+export const RETRY_DELAY_S = 30;
 
 export class ApiError extends Error {
   constructor(
@@ -94,6 +104,13 @@ export const api = {
         callback_url: input.callback_url,
       }),
     }),
+  retry: (id: string) => request<Task>(`/v1/tasks/${id}/retry`, { method: "POST" }),
 };
 
 export const isActive = (s: Status) => ACTIVE.includes(s);
+
+/** What the UI shows: a queued task that already failed an attempt is waiting in the retry queue. */
+export type DisplayStatus = Status | "retrying";
+
+export const displayStatus = (t: Task): DisplayStatus =>
+  t.status === "queued" && t.attempt > 0 && t.error ? "retrying" : t.status;
