@@ -70,6 +70,62 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
+## Diagrams
+
+Hand-drawn with [Excalidraw](https://excalidraw.com). Each diagram has an editable `.excalidraw` source and `.svg`/`.png` exports in [`docs/report/diagrams/`](docs/report/diagrams/), generated from the Python scripts in [`docs/report/diagrams/src/`](docs/report/diagrams/src/) (`python3 docs/report/diagrams/render.py <name>`).
+
+### Architecture
+
+[![Architecture](docs/report/diagrams/architecture.png)](docs/report/diagrams/architecture.excalidraw)
+
+### Deployment on Kubernetes
+
+[![Deployment on Kubernetes](docs/report/diagrams/k8s-architecture.png)](docs/report/diagrams/k8s-architecture.excalidraw)
+
+### Submitting and processing a task
+
+[![Submitting and processing a task](docs/report/diagrams/submit-sequence.png)](docs/report/diagrams/submit-sequence.excalidraw)
+
+### Task lifecycle (state machine)
+
+[![Task lifecycle (state machine)](docs/report/diagrams/task-state-machine.png)](docs/report/diagrams/task-state-machine.excalidraw)
+
+### A worker dies mid-task: redelivery and heartbeat takeover
+
+[![A worker dies mid-task: redelivery and heartbeat takeover](docs/report/diagrams/worker-crash-takeover.png)](docs/report/diagrams/worker-crash-takeover.excalidraw)
+
+### The publish gap and the sweeper
+
+[![The publish gap and the sweeper](docs/report/diagrams/publish-gap-sweeper.png)](docs/report/diagrams/publish-gap-sweeper.excalidraw)
+
+### RabbitMQ topology: retries and dead-lettering
+
+[![RabbitMQ topology: retries and dead-lettering](docs/report/diagrams/rabbitmq-topology.png)](docs/report/diagrams/rabbitmq-topology.excalidraw)
+
+### Worker: one message, three outcomes (ack / retry / dead)
+
+[![Worker: one message, three outcomes (ack / retry / dead)](docs/report/diagrams/worker-decision-flow.png)](docs/report/diagrams/worker-decision-flow.excalidraw)
+
+### Webhook delivery: park it, retry later, never recompute
+
+[![Webhook delivery: park it, retry later, never recompute](docs/report/diagrams/webhook-delivery.png)](docs/report/diagrams/webhook-delivery.excalidraw)
+
+### Data model
+
+[![Data model](docs/report/diagrams/data-model.png)](docs/report/diagrams/data-model.excalidraw)
+
+### Use cases
+
+[![Use cases](docs/report/diagrams/use-case.png)](docs/report/diagrams/use-case.excalidraw)
+
+### Development environment (scripts/dev.sh)
+
+[![Development environment (scripts/dev.sh)](docs/report/diagrams/dev-environment.png)](docs/report/diagrams/dev-environment.excalidraw)
+
+### Sprint planning
+
+[![Sprint planning](docs/report/diagrams/sprints-planning.png)](docs/report/diagrams/sprints-planning.excalidraw)
+
 ## Layout
 
 | Path | What |
