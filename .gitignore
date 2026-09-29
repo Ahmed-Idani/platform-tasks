@@ -25,3 +25,6 @@ dist/
 
 # Kubernetes secrets (see deploy/k8s/secrets.env.example)
 deploy/k8s/secrets.env
+
+# Report/planning material: kept local only, not for the public repo
+docs/
