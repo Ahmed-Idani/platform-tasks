@@ -72,59 +72,27 @@ stateDiagram-v2
 
 ## Diagrams
 
-Hand-drawn with [Excalidraw](https://excalidraw.com). Each diagram has an editable `.excalidraw` source and `.svg`/`.png` exports in [`docs/report/diagrams/`](docs/report/diagrams/), generated from the Python scripts in [`docs/report/diagrams/src/`](docs/report/diagrams/src/) (`python3 docs/report/diagrams/render.py <name>`).
-
-### Architecture
-
-[![Architecture](docs/report/diagrams/architecture.png)](docs/report/diagrams/architecture.excalidraw)
+The flowcharts above cover the basic shape. A few things are easier to show than to describe, so they're hand-drawn in [Excalidraw](https://excalidraw.com) — editable `.excalidraw` sources sit next to the PNGs in [`.github/diagrams/`](.github/diagrams/).
 
 ### Deployment on Kubernetes
 
-[![Deployment on Kubernetes](docs/report/diagrams/k8s-architecture.png)](docs/report/diagrams/k8s-architecture.excalidraw)
-
-### Submitting and processing a task
-
-[![Submitting and processing a task](docs/report/diagrams/submit-sequence.png)](docs/report/diagrams/submit-sequence.excalidraw)
-
-### Task lifecycle (state machine)
-
-[![Task lifecycle (state machine)](docs/report/diagrams/task-state-machine.png)](docs/report/diagrams/task-state-machine.excalidraw)
+[![Deployment on Kubernetes](.github/diagrams/k8s-architecture.png)](.github/diagrams/k8s-architecture.excalidraw)
 
 ### A worker dies mid-task: redelivery and heartbeat takeover
 
-[![A worker dies mid-task: redelivery and heartbeat takeover](docs/report/diagrams/worker-crash-takeover.png)](docs/report/diagrams/worker-crash-takeover.excalidraw)
-
-### The publish gap and the sweeper
-
-[![The publish gap and the sweeper](docs/report/diagrams/publish-gap-sweeper.png)](docs/report/diagrams/publish-gap-sweeper.excalidraw)
+[![A worker dies mid-task: redelivery and heartbeat takeover](.github/diagrams/worker-crash-takeover.png)](.github/diagrams/worker-crash-takeover.excalidraw)
 
 ### RabbitMQ topology: retries and dead-lettering
 
-[![RabbitMQ topology: retries and dead-lettering](docs/report/diagrams/rabbitmq-topology.png)](docs/report/diagrams/rabbitmq-topology.excalidraw)
-
-### Worker: one message, three outcomes (ack / retry / dead)
-
-[![Worker: one message, three outcomes (ack / retry / dead)](docs/report/diagrams/worker-decision-flow.png)](docs/report/diagrams/worker-decision-flow.excalidraw)
+[![RabbitMQ topology: retries and dead-lettering](.github/diagrams/rabbitmq-topology.png)](.github/diagrams/rabbitmq-topology.excalidraw)
 
 ### Webhook delivery: park it, retry later, never recompute
 
-[![Webhook delivery: park it, retry later, never recompute](docs/report/diagrams/webhook-delivery.png)](docs/report/diagrams/webhook-delivery.excalidraw)
+[![Webhook delivery: park it, retry later, never recompute](.github/diagrams/webhook-delivery.png)](.github/diagrams/webhook-delivery.excalidraw)
 
 ### Data model
 
-[![Data model](docs/report/diagrams/data-model.png)](docs/report/diagrams/data-model.excalidraw)
-
-### Use cases
-
-[![Use cases](docs/report/diagrams/use-case.png)](docs/report/diagrams/use-case.excalidraw)
-
-### Development environment (scripts/dev.sh)
-
-[![Development environment (scripts/dev.sh)](docs/report/diagrams/dev-environment.png)](docs/report/diagrams/dev-environment.excalidraw)
-
-### Sprint planning
-
-[![Sprint planning](docs/report/diagrams/sprints-planning.png)](docs/report/diagrams/sprints-planning.excalidraw)
+[![Data model](.github/diagrams/data-model.png)](.github/diagrams/data-model.excalidraw)
 
 ## Layout
 
@@ -139,11 +107,7 @@ Hand-drawn with [Excalidraw](https://excalidraw.com). Each diagram has an editab
 | `deploy/monitoring/` | Prometheus/Grafana/Loki values, PodMonitors, alert rules, dashboard generator |
 | `infra/` | Config for third-party services: RabbitMQ topology (`definitions.json`), Garage (`garage.toml`) |
 | `scripts/` | `dev.sh` (whole stack), `webhook_receiver.py` (example client endpoint with an inbox page on :9000) |
-| `docs/webhooks.md` | **Webhook contract**: what a client endpoint receives and must answer |
-| `docs/report/` | Final report material: diagrams, screenshots, code images, French notes (see `INVENTORY.md`) |
 | `testdata/` | Sample inputs |
-| `docs/plan/` | Project context, build plan, TODO / decision log |
-| `docs/guides/` | Step-by-step guides |
 
 ## Run on Kubernetes (k3s via k3d)
 
